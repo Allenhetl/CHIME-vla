@@ -149,6 +149,11 @@ class LossConfig:
     lambda_3: float = 0.1  # L_CSM
     lambda_4: float = 0.0  # L_GC, MVP off
     lambda_ent: float = 0.01  # L_aux
+    # M2 MVP fallback (§0.7.4): self-supervised L_predict for [C5] ψ.
+    # Default 0.0 keeps pre-M2 configs identical (legacy YAMLs leave it off);
+    # m2_mvp_fallback.yaml overrides to 1.0 to give ψ its only grad signal
+    # once L_HCS is permanently zero.
+    lambda_predict: float = 0.0
     entropy_floor: float = 1.0  # SG-7 monitor threshold
 
 

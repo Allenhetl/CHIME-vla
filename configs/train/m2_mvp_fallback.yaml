@@ -23,6 +23,10 @@ loss:
   lambda_3: 0.0             # was 0.1 — drop L_CSM
   lambda_4: 0.0             # L_GC stays off
   lambda_ent: 0.01          # keep L_aux entropy
+  # M2 fallback: self-supervised L_predict gives ψ its only grad signal
+  # once L_HCS is permanently zero (architecture §0.7.4: "[C5 仅
+  # prediction-error self-supervised, GRU 实现]").
+  lambda_predict: 1.0
 
 # Disable training-only modules
 c10:

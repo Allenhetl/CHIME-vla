@@ -24,7 +24,7 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 
-from chime_vla.config import C11Config, C12Config
+from chime_vla.config import C11Config, C12Config  # noqa: F401  (re-export)
 from chime_vla.utils.losses import masked_mse
 
 
@@ -279,6 +279,52 @@ def compute_prh_loss(
         valid_mask=valid_mask,
         alpha_a=alpha_a,
         horizons=horizons,
+    )
+
+
+def loss_predict_self_supervised(
+    h_hat_pred_seq: Tensor,
+    h_target_seq: Tensor,
+    valid_mask: Tensor,
+) -> Tensor:
+    """L_predict — self-supervised next-frame prediction MSE for [C5] ψ.
+
+    ψ predicts ``h_t`` from ``M_work^{t-1}`` (a 1-layer GRU over the FIFO).
+    In the M2 MVP fallback path (architecture §0.7.4 + §I.4 #1) λ_1 = 0
+    permanently — without this self-supervised term, ψ would receive *no*
+    gradient signal at all (L_main / L_PRH are SG-blocked from ψ via SG-1
+    and SG-2 respectively, and L_aux only trains [C8]'s attention).
+    Architecture §0.7.4 explicitly mandates: "[C5 仅 prediction-error
+    self-supervised, GRU 实现]".
+
+    Reduction follows CODE_STANDARDS §1.4: mean over (B, valid-T, d_h).
+    Caller MUST pass ``h_target_seq`` with ``.detach()`` applied — otherwise
+    the gradient would back-propagate into [C1] through the per-frame ``h_t``
+    targets, which is forbidden by SG-1 (write heads see ``sg(γ)`` precisely
+    so this self-prediction does not back-couple perception).
+
+    Args:
+        h_hat_pred_seq: ``(B, T, d_h)`` fp32 — stacked ``c5.last_h_hat_pred``.
+            Carries grad — this is the only path that trains ψ on the M2
+            fallback YAML.
+        h_target_seq:   ``(B, T, d_h)`` fp32 — caller-detached target.  Must
+            already be detached; this function does NOT call ``.detach()``
+            (so a missing detach in train_step is loud, not silent).
+        valid_mask:     ``(B, T)`` bool.
+
+    Returns:
+        scalar fp32 loss; 0 if no valid frame.
+    """
+    if h_hat_pred_seq.shape != h_target_seq.shape:
+        raise ValueError(
+            f"loss_predict_self_supervised shape mismatch: "
+            f"pred={tuple(h_hat_pred_seq.shape)} vs "
+            f"target={tuple(h_target_seq.shape)}"
+        )
+    return masked_mse(
+        h_hat_pred_seq.to(torch.float32),
+        h_target_seq.to(torch.float32),
+        valid_mask,
     )
 
 

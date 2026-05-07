@@ -29,6 +29,7 @@ from chime_vla.training.losses import (
     loss_csm,
     loss_hcs,
     loss_main,
+    loss_predict_self_supervised,
 )
 from chime_vla.training.schedules import lambda_1_schedule
 
@@ -108,6 +109,7 @@ def chime_train_step(
     attn_entropy_steps: list[Tensor] = []
     m_t_steps: list[Tensor] = []      # (B, d_h) per t — for PRH input
     h_pool_steps: list[Tensor] = []   # (B, d_h) per t — for PRH obs target
+    h_hat_pred_steps: list[Tensor] = []  # (B, d_h) per t — for L_predict (M2 fallback)
 
     bptt_n = max(1, int(cfg.train.bptt_truncate))
 
@@ -122,6 +124,11 @@ def chime_train_step(
         #    Pre-append snapshot — first frame is all-zero ring (matches contract).
         m_work_prev = c2.snapshot()
         gamma_geo, gamma_sem = model.c5(h_t, m_work_prev)
+        # Capture ψ's prediction for the M2 self-supervised L_predict path
+        # (architecture §0.7.4).  Tensor still carries grad through ψ.
+        h_hat_pred_t = model.c5.last_h_hat_pred
+        if h_hat_pred_t is not None:
+            h_hat_pred_steps.append(h_hat_pred_t)
 
         # 3) [C2] append.  WorkBuffer.append mutates c2.buffer in-place; for
         #    autograd safety in a sequential per-step loop we build the
@@ -257,6 +264,23 @@ def chime_train_step(
     L_CSM = loss_csm(csm_w, cfg.c12.beta)
     L_aux = loss_aux(attn_entropy, cfg.loss.lambda_ent)
 
+    # ---- L_predict (M2 MVP fallback, architecture §0.7.4) ----
+    # Self-supervised next-frame prediction trains ψ when L_HCS is permanently
+    # off.  Skip when λ_predict == 0 to avoid the autograd memory cost on
+    # legacy YAMLs that don't set the field.
+    lam_predict = float(getattr(cfg.loss, "lambda_predict", 0.0))
+    if lam_predict != 0.0 and len(h_hat_pred_steps) == T:
+        h_hat_pred_seq = torch.stack(h_hat_pred_steps, dim=1)        # (B, T, d_h)
+        # Target = each step's ACTUAL h_t pooled over N.  We've already
+        # accumulated this in h_pool_steps.  Detach to enforce SG (ψ's grad
+        # never flows back into [C1] via the target).
+        h_target_seq = torch.stack(h_pool_steps, dim=1).detach()     # (B, T, d_h)
+        L_predict = loss_predict_self_supervised(
+            h_hat_pred_seq, h_target_seq, valid_mask
+        )
+    else:
+        L_predict = a_pred.new_zeros(())
+
     lam1 = lambda_1_schedule(step, cfg.loss)
 
     total = (
@@ -264,6 +288,7 @@ def chime_train_step(
         + lam1 * L_HCS
         + lam2 * L_PRH
         + float(cfg.loss.lambda_3) * L_CSM
+        + lam_predict * L_predict
         + L_aux
     )
 
@@ -286,6 +311,7 @@ def chime_train_step(
         "L_PRH": L_PRH if isinstance(L_PRH, Tensor) else torch.as_tensor(L_PRH),
         "L_CSM": L_CSM if isinstance(L_CSM, Tensor) else torch.as_tensor(L_CSM),
         "L_aux": L_aux if isinstance(L_aux, Tensor) else torch.as_tensor(L_aux),
+        "L_predict": L_predict if isinstance(L_predict, Tensor) else torch.as_tensor(L_predict),
         "total": total,
         "lambda_1": torch.as_tensor(lam1, dtype=torch.float32),
         "gamma_geo_mean": gamma_geo_mean,

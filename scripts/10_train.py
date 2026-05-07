@@ -74,6 +74,16 @@ def main(cfg: DictConfig) -> None:
     trainer_kwargs.setdefault("log_every_n_steps", 1)
     trainer_kwargs.setdefault("enable_checkpointing", False)
 
+    # Default to a CSVLogger alongside the TB logger so M2 analysis scripts
+    # can read step-by-step metrics from a stable schema (lightning_logs/
+    # version_*/metrics.csv).  Skip if the user has already configured logger.
+    if "logger" not in trainer_kwargs:
+        from pytorch_lightning.loggers import CSVLogger, TensorBoardLogger
+        trainer_kwargs["logger"] = [
+            TensorBoardLogger(save_dir="lightning_logs", name=""),
+            CSVLogger(save_dir="lightning_logs", name=""),
+        ]
+
     trainer = pl.Trainer(**trainer_kwargs)
     trainer.fit(module, datamodule=dm)
 

@@ -125,6 +125,11 @@ class ESPC(nn.Module):
         self.register_buffer(
             "_last_e_sem_var", torch.zeros((), dtype=torch.float32), persistent=False
         )
+        # Last forward's ψ prediction (B, d_h) fp32 — exposed via property for
+        # the M2 self-supervised L_predict loss (architecture §0.7.4: "[C5 仅
+        # prediction-error self-supervised, GRU 实现]").  Set to None until the
+        # first forward; not part of state_dict.
+        self._last_h_hat_pred: Tensor | None = None
         self._has_pending_stats: bool = False
 
     # ------------------------------------------------------------------
@@ -168,6 +173,10 @@ class ESPC(nn.Module):
         else:
             raise NotImplementedError("[C5] ψ Transformer mode not implemented")
         h_hat_pred = self.psi_norm(h_hat_pred)  # (B, d_h)
+        # Cache for L_predict_self_supervised consumers (caller stacks this
+        # over T to form (B, T, d_h)).  Held WITH grad — caller may detach
+        # the *target* but never the prediction.
+        self._last_h_hat_pred = h_hat_pred
 
         # 3. Pool h_t and project both into d_proj
         h_t_pooled = h_t_f.mean(dim=1)  # (B, d_h)
@@ -225,6 +234,24 @@ class ESPC(nn.Module):
 
         # Final dtype guarantee: γ ∈ fp32, shape (B,)
         return gamma_geo.to(torch.float32), gamma_sem.to(torch.float32)
+
+    # ------------------------------------------------------------------
+    # last_h_hat_pred — accessor for the M2 self-supervised L_predict loss
+    # ------------------------------------------------------------------
+    @property
+    def last_h_hat_pred(self) -> Tensor | None:
+        """Most recent forward's ψ prediction ``(B, d_h)`` fp32.
+
+        ``None`` if no forward has been called.  Used by the M2 fallback
+        path's ``L_predict_self_supervised`` (architecture §0.7.4); under
+        normal full training the predictor is also trained by L_HCS and
+        this signal is a redundancy check rather than the primary learner.
+
+        The returned tensor is the *live* prediction (with gradient
+        attached); the caller is responsible for detaching the *target*
+        (``h_t``) before computing MSE so no grad flows back into [C1].
+        """
+        return self._last_h_hat_pred
 
     # ------------------------------------------------------------------
     # update_ema

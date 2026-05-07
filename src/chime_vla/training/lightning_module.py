@@ -110,6 +110,8 @@ class ChimeVlaLightning(pl.LightningModule):
         self.log("train/L_PRH", out["L_PRH"], prog_bar=False, **log_kw)
         self.log("train/L_CSM", out["L_CSM"], prog_bar=False, **log_kw)
         self.log("train/L_aux", out["L_aux"], prog_bar=False, **log_kw)
+        if "L_predict" in out:
+            self.log("train/L_predict", out["L_predict"], prog_bar=False, **log_kw)
         self.log("train/lambda_1", out["lambda_1"], prog_bar=False, **log_kw)
         self.log("train/gamma_geo", out["gamma_geo_mean"], prog_bar=False, **log_kw)
         self.log("train/gamma_sem", out["gamma_sem_mean"], prog_bar=False, **log_kw)
