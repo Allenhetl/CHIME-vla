@@ -12,7 +12,6 @@ M0_XFAIL = pytest.mark.xfail(
 )
 
 
-@M0_XFAIL
 def test_reset_zeros_all_memory(mock_chime_config):
     """`reset_memory(state, batch_indices)` clears M_geo, M_sem.v and re-flips
     slot_free to all-True for the named batch slots.  M_work is also flushed.

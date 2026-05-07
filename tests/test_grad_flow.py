@@ -28,7 +28,6 @@ def _zero_or_none(grad: torch.Tensor | None, atol: float = 1e-9) -> bool:
 # SG-1: γ → ψ stop-grad (write heads consume sg(γ))
 # ---------------------------------------------------------------------------
 
-@M0_XFAIL
 def test_sg_1_gamma_to_psi(mock_chime_model, synthetic_batch):
     """L_main back-prop must NOT reach ESPC ψ via γ_geo / γ_sem.
 
@@ -64,7 +63,6 @@ def test_sg_1_gamma_to_psi(mock_chime_model, synthetic_batch):
 # SG-2: PRH → [C1] stop-grad (PRH consumes sg(m_t))
 # ---------------------------------------------------------------------------
 
-@M0_XFAIL
 def test_sg_2_prh_query_to_perception(mock_chime_model, synthetic_batch):
     """L_PRH must NOT flow back into [C1] via the m_t query."""
     m = mock_chime_model
@@ -90,7 +88,6 @@ def test_sg_2_prh_query_to_perception(mock_chime_model, synthetic_batch):
 # SG-3: γ̂ is a target, must be detached before BCE
 # ---------------------------------------------------------------------------
 
-@M0_XFAIL
 def test_sg_3_gammahat_target(mock_chime_model, synthetic_batch_with_gamma):
     """γ̂ tensors loaded from Hindsight must be treated as `.detach()`-equivalent
     targets: a synthetic γ̂ that requires grad must have no grad after BCE."""
@@ -189,7 +186,6 @@ def test_sg_5_mwork_to_perception_via_psi(mock_chime_model, synthetic_batch_with
 # SG-6: [C5] geo_proj / sem_proj — trainable ONLY by L_HCS, NOT L_main
 # ---------------------------------------------------------------------------
 
-@M0_XFAIL
 def test_sg_6_proj_only_lhcs(mock_chime_model, synthetic_batch):
     """L_main must NOT touch ESPC's geo_proj / sem_proj parameters."""
     m = mock_chime_model
@@ -213,7 +209,6 @@ def test_sg_6_proj_only_lhcs(mock_chime_model, synthetic_batch):
 # SG-7: read attention entropy floor (runtime metric, not sg-able)
 # ---------------------------------------------------------------------------
 
-@M0_XFAIL
 def test_sg_7_attention_entropy_floor(mock_chime_model, synthetic_batch):
     """SG-7 is structural (cross-attn cannot be sg-ed without breaking the
     read pathway).  We assert the runtime monitor: H(attn over M_work) stays

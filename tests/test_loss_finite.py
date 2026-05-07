@@ -16,7 +16,6 @@ M0_XFAIL = pytest.mark.xfail(
 )
 
 
-@M0_XFAIL
 def test_5_losses_finite_on_4_step_batch(mock_chime_config, synthetic_batch_with_gamma):
     """Run `chime_train_step` for 4 frames and check each loss term."""
     pytest.importorskip("chime_vla")

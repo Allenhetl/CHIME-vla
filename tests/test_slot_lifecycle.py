@@ -16,7 +16,6 @@ M0_XFAIL = pytest.mark.xfail(
 )
 
 
-@M0_XFAIL
 def test_initial_state_all_free(mock_chime_config):
     """A fresh SemBank must have slot_free=True for every slot, every batch."""
     pytest.importorskip("chime_vla")
@@ -28,7 +27,6 @@ def test_initial_state_all_free(mock_chime_config):
     assert bool(bank.slot_free.all()), "fresh SemBank must have all slots free"
 
 
-@M0_XFAIL
 def test_evict_zeros_value_keeps_key(mock_chime_config):
     """evict(b, i): v_i ← 0, slot_free[i] ← 1, k_i unchanged."""
     pytest.importorskip("chime_vla")
@@ -47,7 +45,6 @@ def test_evict_zeros_value_keeps_key(mock_chime_config):
     assert torch.allclose(bank.k[0, 3], k_before), "evict must NOT touch k_i"
 
 
-@M0_XFAIL
 def test_softmax_logit_penalty_isolates_free_slots(mock_chime_config):
     """logit_i -= 1e9 * slot_free[i] should make the softmax over free slots
     yield ~0 probability mass.
