@@ -2,8 +2,8 @@
 
 ## Current state
 
-- **Milestone**: M0/M1/M2/M3 ALL PASS (MVP fallback path) → ready for M4
-- **Active branch**: `m1/forward-impl` (推 GitHub, 18+ commits)
+- **Milestone**: M0/M1/M2/M3/**M4 ALL PASS** (MVP fallback path) → M5 dropped → M6 next
+- **Active branch**: `m1/forward-impl` (推 GitHub, 20 commits, ready to merge)
 - **Updated**: 2026-05-08
 - **Mode**: Autonomous orchestrator
 
@@ -23,6 +23,9 @@
 | M3 grad flow fix | C3/C4 out-of-place memory updates, C3/C4 grad alive |
 | M3 slot_free fix | argmax replaces threshold (was deadlocked at K_s=64) |
 | **M3 PASS** | L_PRH per-k each 200×+ ↓, M_geo 2.6%, write head grad live |
+| M4 SR proxy script | scripts/20_eval_sr.py impl: per-(B,T) MSE + hit rate + per-step curve |
+| M4 600-step training | 4 epoch, L_main 5700× ↓, L_PRH 645× ↓ |
+| **M4 PASS** | hit@σ/2 = 61.8%, action MSE 0.746, per-step ratio 5.24× |
 
 ## Most recent operations (last 8)
 
@@ -89,12 +92,21 @@
 - [x] L_PRH per-k log (k=4 / k=16) — each 200×+ ↓
 - [x] slot_free argmax fix (M_sem from 0% → 1.56%)
 
-### M4 — full training + LIBERO SR baseline (NEXT)
-- [ ] Phase 4a: longer training + val curves
-- [ ] Phase 4b: offline SR proxy
-- [ ] Phase 4c: defer to production stage (LIBERO sim + OpenVLA baseline)
+### M4 — full training + LIBERO SR proxy ✓ PASS
+- [x] Phase 4a: 600-step training (L_main 1547→0.27, L_PRH 497→0.77)
+- [x] Phase 4b: SR proxy script (scripts/20_eval_sr.py)
+- [x] Phase 4b eval: action MSE 0.746, hit@σ/2 = 61.8%, ratio 5.24×
+- [ ] Phase 4c: full LIBERO sim + OpenVLA baseline — DEFERRED to production stage
 
-### M6 — Ablation (3-loss subset, post-M4)
+### M5 — DROPPED per user (LIBERO-only)
+
+### M6 — Ablation (3-loss subset, NEXT)
+Subset of 10 ablations applicable to MVP fallback path:
+- [ ] Remove L_PRH (lambda_2=0): does L_main alone suffice?
+- [ ] Remove L_predict (lambda_predict=0): is C5 self-sup necessary?
+- [ ] Single-channel (M_geo only or M_sem only): does dual channel help?
+- [ ] K_s ∈ {32, 64, 128}: slot bank capacity
+- [ ] slot_free mask vs naive zero-fill: D5 修订必要性
 
 ## GitHub
 - 仓库: https://github.com/Allenhetl/CHIME-vla.git
