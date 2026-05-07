@@ -5,8 +5,8 @@
 defaults:
   - base/chime
   - model: chime_mvp
-  - train: m0_smoke
   - data: libero_long
+  - train: m0_smoke
   - _self_
 
 # === Top-level run metadata ===

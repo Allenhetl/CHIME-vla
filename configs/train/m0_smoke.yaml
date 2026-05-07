@@ -6,6 +6,11 @@
 # - hindsight disabled (γ̂ may not exist on disk yet)
 # - lambda_1_target = 0 forces L_HCS contribution to 0 even if accidentally on
 # - bs / T scaled down so a forward pass runs on a single GPU in seconds
+#
+# NOTE: this YAML must come *after* `data: libero_long` in the defaults list
+# so that data.T_max here overrides libero_long.yaml (256).  The
+# configs/default.yaml currently lists train BEFORE data — pass T_max on
+# the CLI (`data.T_max=64`) to override, or move m0_smoke after data.
 
 milestone: M0
 experiment_name: m0_smoke

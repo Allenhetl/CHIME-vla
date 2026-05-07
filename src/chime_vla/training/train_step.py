@@ -8,38 +8,59 @@ Top-level entry point that the LightningModule wraps in
 
 with the SG topology:
     SG-1: write heads receive ``sg(γ_geo) / sg(γ_sem)``
-    SG-2: PRH receives ``sg(m_t)``
+    SG-2: PRH receives ``sg(m_t)`` (M2+; not exercised in M1)
     SG-5: BCE target γ̂ wrapped in ``sg(.)`` before L_HCS
-
-This file also defines the ``ChimeVlaModule`` typing protocol so
-:func:`chime_train_step` can take a structurally-typed forward model
-without circular imports.
 """
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Optional, Protocol
 
+import torch
 from torch import Tensor
 
 from chime_vla.config import ChimeConfig
+from chime_vla.memory.geo_grid import GeoGrid
+from chime_vla.memory.sem_bank import SemBank
+from chime_vla.perception.fifo_buffer import WorkBuffer
+from chime_vla.training.losses import (
+    loss_aux,
+    loss_csm,
+    loss_hcs,
+    loss_main,
+    loss_prh,
+)
+from chime_vla.training.schedules import lambda_1_schedule
 
 
 class ChimeVlaModule(Protocol):
-    """Structural type — anything exposing the 13 component handles.
+    """Structural type — anything exposing the component handles.
 
     Concrete impl: :class:`chime_vla.training.lightning_module.ChimeVlaLightning`.
     """
 
     c1: object
-    c2: object
     c3: object
     c4: object
     c5: object
     c8: object
     c9: object
-    c11: object
-    c9_frozen: object  # frozen [C9] snapshot for CSM
+
+
+def _detach_memory(m_geo: GeoGrid, m_sem: SemBank, c2: WorkBuffer) -> None:
+    """In-place BPTT truncation: detach memory state from autograd graph.
+
+    Called every ``cfg.train.bptt_truncate`` steps inside the per-episode
+    loop.  Without this, a 200-step LIBERO episode would build up a graph
+    too large for backward (OOM on a 24 GB GPU).
+    """
+    # Geo grids fp32 — detach in-place via copy.
+    for L, g in m_geo.grids.items():
+        m_geo.grids[L] = g.detach()
+    # Sem bank values fp32.
+    m_sem.v = m_sem.v.detach()
+    # WorkBuffer ring (bf16) — detach.
+    c2.buffer = c2.buffer.detach()
 
 
 def chime_train_step(
@@ -52,19 +73,160 @@ def chime_train_step(
 
     Args:
         batch: ``{rgb / proprio / action / sub_task_id / episode_id /
-                  valid_mask}`` plus, when ``cfg.hindsight.enabled``,
-                  ``gamma_hat_geo`` and ``gamma_hat_sem`` (each ``(B, T)``
-                  fp32).  Shapes per ``CODE_STRUCTURE.md §5``.
+                  valid_mask}`` plus optional ``gamma_hat_geo``,
+                  ``gamma_hat_sem`` (each ``(B, T)`` fp32).
         model: the LightningModule (or any structurally-typed forward).
         cfg:   :class:`ChimeConfig`.
         step:  current global training step (drives λ_1 schedule).
 
     Returns:
         dict with keys ``L_main``, ``L_HCS``, ``L_PRH``, ``L_CSM``,
-        ``L_aux``, ``total``, ``lambda_1`` plus diagnostics
-        (``gamma_geo_mean``, ``M_geo_occupancy_pct``, ...).
+        ``L_aux``, ``total``, ``lambda_1`` plus diagnostics.
     """
-    raise NotImplementedError(
-        "[train_step] chime_train_step — M0 stub; "
-        "see CODE_STRUCTURE.md §7 for canonical pseudocode."
+    rgb = batch["rgb"]                # (B, T, 3, 224, 224) float32 or uint8
+    proprio = batch["proprio"]        # (B, T, 8) fp32
+    action_gt = batch["action"]       # (B, T, 8) fp32
+    valid_mask = batch["valid_mask"]  # (B, T) bool
+
+    if rgb.dim() != 5:
+        raise ValueError(
+            f"chime_train_step expected rgb (B, T, 3, 224, 224); "
+            f"got {tuple(rgb.shape)}"
+        )
+
+    B, T = rgb.shape[:2]
+    device = rgb.device
+
+    # ---- (re-)instantiate non-Module memory containers ----
+    c2 = WorkBuffer(cfg.c2, batch_size=B, device=device)
+    m_geo = GeoGrid(cfg.c6, batch_size=B, d_g=cfg.c6.d_g, device=device)
+    m_sem = SemBank(cfg.c7, batch_size=B, device=device)
+
+    a_pred_steps: list[Tensor] = []
+    gamma_geo_steps: list[Tensor] = []
+    gamma_sem_steps: list[Tensor] = []
+    attn_entropy_steps: list[Tensor] = []
+
+    bptt_n = max(1, int(cfg.train.bptt_truncate))
+
+    for t in range(T):
+        rgb_t = rgb[:, t]            # (B, 3, 224, 224)
+        proprio_t = proprio[:, t]    # (B, 8)
+
+        # 1) [C1] perception — h_t (B, N, d_h) bf16
+        h_t = model.c1(rgb_t, proprio_t)
+
+        # 2) [C5] ESPC — uses M_work BEFORE the current frame's append (§1.3).
+        #    Pre-append snapshot — first frame is all-zero ring (matches contract).
+        m_work_prev = c2.snapshot()
+        gamma_geo, gamma_sem = model.c5(h_t, m_work_prev)
+
+        # 3) [C2] append.  WorkBuffer.append mutates c2.buffer in-place; for
+        #    autograd safety in a sequential per-step loop we build the
+        #    post-append ring as a fresh tensor and keep c2.buffer in sync.
+        if c2.K_w > 1:
+            shifted = torch.cat([c2.buffer[:, 1:], h_t.to(c2.buffer.dtype).unsqueeze(1)], dim=1)
+        else:
+            shifted = h_t.to(c2.buffer.dtype).unsqueeze(1)
+        c2.buffer = shifted
+        c2._n_appended = torch.clamp(c2._n_appended + 1, max=c2.K_w)
+        m_work_post = shifted
+
+        # 4) [C3]/[C4] writes (SG-1: detach γ before passing to write heads).
+        # NB: under torch.no_grad() so the in-place scatter does not enter
+        # the autograd graph.  In M1 the write-head gradients arrive only
+        # via L_HCS (which is 0 until E1 PASS); L_main ↔ write-head paths
+        # are M2+ once we bring in proper graph-friendly memory.
+        gamma_geo_sg = gamma_geo.detach()
+        gamma_sem_sg = gamma_sem.detach()
+        h_t_sg = h_t.detach()
+        with torch.no_grad():
+            model.c3(h_t_sg, gamma_geo_sg, m_geo, step=t)
+            model.c4(h_t_sg, gamma_sem_sg, m_sem, step=t)
+
+        # 5) [C8] readout — c_t (B, N_q + K_w, d_h)
+        c_t = model.c8(m_work_post, m_geo, m_sem, h_t)
+
+        # 6) [C9] action expert — a_pred (B, action_dim)
+        h_t_cls = h_t.mean(dim=1)  # (B, d_h)
+        a_pred_t = model.c9(c_t, h_t_cls)
+        a_pred_steps.append(a_pred_t)
+
+        gamma_geo_steps.append(gamma_geo)
+        gamma_sem_steps.append(gamma_sem)
+
+        # entropy diagnostic / L_aux signal
+        try:
+            ent_t = model.c8.attn_entropy_to_M_work
+            if ent_t is not None:
+                attn_entropy_steps.append(ent_t)
+        except RuntimeError:
+            pass
+
+        # ---- BPTT truncation (CODE_STANDARDS §1.8) ----
+        if (t + 1) % bptt_n == 0 and (t + 1) < T:
+            _detach_memory(m_geo, m_sem, c2)
+
+    # ---- stack per-step outputs ----
+    a_pred = torch.stack(a_pred_steps, dim=1)              # (B, T, action_dim)
+    gamma_pred_geo = torch.stack(gamma_geo_steps, dim=1)   # (B, T)
+    gamma_pred_sem = torch.stack(gamma_sem_steps, dim=1)   # (B, T)
+    if len(attn_entropy_steps) > 0:
+        attn_entropy = torch.stack(attn_entropy_steps, dim=0).mean(dim=0)  # (B,)
+    else:
+        attn_entropy = a_pred.new_zeros((B,))
+
+    # ---- losses ----
+    L_main = loss_main(a_pred, action_gt, valid_mask)
+
+    gamma_hat_geo = batch.get("gamma_hat_geo")
+    gamma_hat_sem = batch.get("gamma_hat_sem")
+    L_HCS = loss_hcs(
+        gamma_pred_geo,
+        gamma_pred_sem,
+        gamma_hat_geo,
+        gamma_hat_sem,
+        valid_mask,
     )
+    L_PRH = loss_prh(None, None, None, valid_mask, cfg.c11.alpha_a, cfg.c11.horizons)
+    L_CSM = loss_csm(None, cfg.c12.beta)
+    L_aux = loss_aux(attn_entropy, cfg.loss.lambda_ent)
+
+    lam1 = lambda_1_schedule(step, cfg.loss)
+
+    total = (
+        L_main
+        + lam1 * L_HCS
+        + float(cfg.loss.lambda_2) * L_PRH
+        + float(cfg.loss.lambda_3) * L_CSM
+        + L_aux
+    )
+
+    # ---- diagnostics ----
+    with torch.no_grad():
+        gamma_geo_mean = gamma_pred_geo.float().mean()
+        gamma_sem_mean = gamma_pred_sem.float().mean()
+        # M_geo occupancy: fraction of voxels with non-zero norm at level 0
+        try:
+            occ = m_geo.occupancy_pct()
+            geo_occ = float(next(iter(occ.values()))) if occ else 0.0
+        except Exception:
+            geo_occ = 0.0
+        # M_sem occupancy: fraction of slots not free
+        sem_occ = (~m_sem.slot_free).float().mean().item()
+
+    out = {
+        "L_main": L_main,
+        "L_HCS": L_HCS if isinstance(L_HCS, Tensor) else torch.as_tensor(L_HCS),
+        "L_PRH": L_PRH if isinstance(L_PRH, Tensor) else torch.as_tensor(L_PRH),
+        "L_CSM": L_CSM if isinstance(L_CSM, Tensor) else torch.as_tensor(L_CSM),
+        "L_aux": L_aux if isinstance(L_aux, Tensor) else torch.as_tensor(L_aux),
+        "total": total,
+        "lambda_1": torch.as_tensor(lam1, dtype=torch.float32),
+        "gamma_geo_mean": gamma_geo_mean,
+        "gamma_sem_mean": gamma_sem_mean,
+        "M_geo_occupancy": torch.as_tensor(geo_occ, dtype=torch.float32),
+        "M_sem_occupancy": torch.as_tensor(sem_occ, dtype=torch.float32),
+        "attn_entropy_M_work": attn_entropy.mean().detach() if attn_entropy.numel() else torch.zeros(()),
+    }
+    return out
