@@ -7,7 +7,8 @@ is a pure data container holding per-level voxel grids and per-voxel
 dtype path (CODE_STANDARDS §1.7):
     grids[level]      : (B, D, H, W, d_g) **fp32** — delta-rule writes
                         accumulate over T~200 steps; bf16 would lose precision.
-    timestamp[level]  : (B, D, H, W) int32 — last write step.
+    timestamp[level]  : (B, D, H, W) int64 — last write step (LRU eviction
+                        target at M3+).
 
 Batch contract (CODE_STANDARDS §1.2): always (B, …, d_g).
 
@@ -31,12 +32,9 @@ class GeoGrid:
     Attributes:
         levels:    list of cubic resolutions (e.g. ``[16]`` MVP, ``[8, 16, 32]`` full).
         grids:     ``{level: (B, D, H, W, d_g) fp32}`` voxel features.
-        timestamp: ``{level: (B, D, H, W) int32}`` last-write step.
+        timestamp: ``{level: (B, D, H, W) int64}`` last-write step.
         alpha_l:   per-level write-strength schedule (mirrors levels).
         workspace_bounds: ``(x_min, x_max, y_min, y_max, z_min, z_max)`` in metres.
-
-    M0: stub — see ``raise NotImplementedError`` in :meth:`reset` /
-    :meth:`occupancy_pct`.
     """
 
     def __init__(
@@ -55,27 +53,51 @@ class GeoGrid:
         self.workspace_bounds: list[float] = list(cfg.workspace_bounds)
 
         # Per-level grids; allocated eagerly so callers can write immediately.
+        # fp32 — delta-rule writes accumulate over T~200 steps; bf16 would
+        # lose precision (CODE_STANDARDS §1.7).
         self.grids: dict[int, Tensor] = {
             L: torch.zeros((self.B, L, L, L, d_g), dtype=torch.float32, device=self.device)
             for L in self.levels
         }
+        # int64 last-write step per voxel — used by LRU eviction (M3+).
         self.timestamp: dict[int, Tensor] = {
-            L: torch.zeros((self.B, L, L, L), dtype=torch.int32, device=self.device)
+            L: torch.zeros((self.B, L, L, L), dtype=torch.int64, device=self.device)
             for L in self.levels
         }
 
     def reset(self, batch_indices: Optional[Tensor] = None) -> None:
         """Zero out grids + timestamps for selected episodes (or all of them).
 
+        ``workspace_bounds`` is metadata and unaffected.
+
         Args:
-            batch_indices: long tensor of batch slots to reset, or None for all.
+            batch_indices: long tensor of batch slots to reset, or ``None``
+                for all.
         """
-        raise NotImplementedError("[C6] GeoGrid.reset — M0 stub")
+        if batch_indices is None:
+            for L in self.levels:
+                self.grids[L].zero_()
+                self.timestamp[L].zero_()
+            return
+
+        idx = batch_indices.to(self.device).long()
+        for L in self.levels:
+            self.grids[L][idx] = 0.0
+            self.timestamp[L][idx] = 0
 
     def occupancy_pct(self) -> dict[int, float]:
         """Per-level fraction of voxels with non-zero norm (sparse-write monitor).
 
+        A voxel counts as "occupied" iff its feature vector has any non-zero
+        component (``|v|.sum(-1) > 0``).  Averaged over batch lanes and
+        spatial dims, returned as a scalar in ``[0, 1]`` per level.
+
         Returns:
-            ``{level: fraction in [0, 1]}`` — averaged across batch.
+            ``{level: fraction in [0, 1]}``.
         """
-        raise NotImplementedError("[C6] GeoGrid.occupancy_pct — M0 stub")
+        out: dict[int, float] = {}
+        for L in self.levels:
+            grid = self.grids[L]  # (B, L, L, L, d_g)
+            occupied = (grid.abs().sum(dim=-1) > 0).float()  # (B, L, L, L)
+            out[L] = float(occupied.mean().item())
+        return out
