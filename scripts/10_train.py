@@ -76,7 +76,13 @@ def main(cfg: DictConfig) -> None:
 
     trainer = pl.Trainer(**trainer_kwargs)
     trainer.fit(module, datamodule=dm)
-    print("Training done.")
+
+    # Always save final checkpoint (M1 E1 needs trained model for re-judgment).
+    out_dir = Path(merged.output_root) / "runs" / merged.experiment_name
+    out_dir.mkdir(parents=True, exist_ok=True)
+    ckpt_path = out_dir / "last.ckpt"
+    trainer.save_checkpoint(str(ckpt_path))
+    print(f"Training done. Checkpoint saved to {ckpt_path}")
 
 
 if __name__ == "__main__":
