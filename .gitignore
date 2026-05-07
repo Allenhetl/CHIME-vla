@@ -1,0 +1,47 @@
+# Hindsight is a sibling repo, not part of CHIME-VLA tree
+Hindsight/
+
+# Build / cache
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Local env
+.venv/
+venv/
+.env
+.env.local
+
+# Output / runs / checkpoints
+output/
+outputs/
+ckpts/
+wandb/
+.hydra/
+hydra_outputs/
+multirun/
+lightning_logs/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Large data (we read from /home/sqmluser/data/, not vendored)
+data/
+datasets/
+*.h5
+*.hdf5
