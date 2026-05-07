@@ -160,7 +160,8 @@ def loss_prh(
     valid_mask: Tensor,
     alpha_a: float,
     horizons: list[int],
-) -> Tensor:
+    return_per_k: bool = False,
+) -> Tensor | tuple[Tensor, dict[int, Tensor]]:
     """L_PRH — Σ_k mean_{B, valid t∈[0,T-k)} ‖ô_{t+k} - o_{t+k}‖² + α_a·‖â_{t+k} - a*_{t+k}‖².
 
     Each horizon k is averaged over (B × valid-(T-k) × feature_dim) and
@@ -179,13 +180,20 @@ def loss_prh(
         valid_mask:     ``(B, T)`` bool.
         alpha_a:        weight on the action-loss term within L_PRH.
         horizons:       list of k offsets.
+        return_per_k:   when True, also return ``{k: per-horizon-loss}``
+            (each entry is the per-horizon ``l_obs + α_a·l_act`` scalar
+            BEFORE summation).  Skipped horizons / no-window cases are
+            absent from the dict.  Default False keeps the single-tensor
+            signature for older callers.
 
     Returns:
         scalar fp32 — 0 if ``prh_out`` is ``None`` / no horizon contributes.
+        When ``return_per_k=True``: ``(total, per_k_dict)``.
     """
     zero = valid_mask.new_zeros((), dtype=torch.float32)
+    per_k: dict[int, Tensor] = {}
     if prh_out is None or future_obs is None or future_actions is None:
-        return zero
+        return (zero, per_k) if return_per_k else zero
 
     B, T = valid_mask.shape
     total = zero
@@ -195,11 +203,11 @@ def loss_prh(
         k = int(k)
         if k <= 0 or T - k <= 0:
             continue
-        per_k = prh_out.get(k)
-        if per_k is None:
+        out_k = prh_out.get(k)
+        if out_k is None:
             continue
-        o_hat = per_k.get("o_hat_seq")
-        a_hat = per_k.get("a_hat_seq")
+        o_hat = out_k.get("o_hat_seq")
+        a_hat = out_k.get("a_hat_seq")
         if o_hat is None or a_hat is None:
             continue
 
@@ -217,12 +225,14 @@ def loss_prh(
 
         l_obs = masked_mse(o_hat.to(torch.float32), o_target, sub_mask)
         l_act = masked_mse(a_hat.to(torch.float32), a_target, sub_mask)
-        total = total + l_obs + float(alpha_a) * l_act
+        loss_k = l_obs + float(alpha_a) * l_act
+        per_k[k] = loss_k
+        total = total + loss_k
         any_term = True
 
     if not any_term:
-        return zero
-    return total
+        return (zero, per_k) if return_per_k else zero
+    return (total, per_k) if return_per_k else total
 
 
 def compute_prh_loss(
@@ -233,7 +243,8 @@ def compute_prh_loss(
     valid_mask: Tensor,
     horizons: list[int],
     alpha_a: float,
-) -> Tensor:
+    return_per_k: bool = False,
+) -> Tensor | tuple[Tensor, dict[int, Tensor]]:
     """End-to-end PRH loss helper used by :func:`chime_train_step`.
 
     Forwards ``sg(m_seq[:, :T-k])`` through the PRH module per horizon and
@@ -249,9 +260,12 @@ def compute_prh_loss(
         valid_mask: ``(B, T)`` bool.
         horizons:   list of k offsets.
         alpha_a:    weight on the action-loss term within L_PRH.
+        return_per_k: when True, also return per-horizon ``{k: loss}``
+            scalars (each is detach-able for logging).
 
     Returns:
         scalar fp32 loss; 0 if no horizon yields a valid prediction window.
+        When ``return_per_k=True``: ``(total, per_k_dict)``.
     """
     B, T, d_h = m_seq.shape
 
@@ -279,6 +293,7 @@ def compute_prh_loss(
         valid_mask=valid_mask,
         alpha_a=alpha_a,
         horizons=horizons,
+        return_per_k=return_per_k,
     )
 
 

@@ -20,8 +20,10 @@ SG-1 contract (CODE_STANDARDS §1.3):
 
 dtype path:
     * Projections (``MLP_q``, ``MLP_v``) run in autocast bf16, but the
-      delta is cast to fp32 before in-place add (CODE_STANDARDS §1.7).
-    * ``m_sem.v`` is fp32 (delta-rule accumulator).
+      delta is cast to fp32 before the out-of-place add (CODE_STANDARDS §1.7).
+    * ``m_sem.v`` is fp32 (delta-rule accumulator) and is REASSIGNED on
+      every write — see the "Autograd-friendly write path" note in
+      ``geo_write.py`` for the same rationale (M3+ grad flow).
     * ``m_sem.k`` is **frozen** — never touched by the write path.
 """
 
@@ -160,16 +162,28 @@ class SemWriteHead(nn.Module):
             * v_new_f32.unsqueeze(1)       # (B, 1,   d_s)
         )  # (B, K_s, d_s) fp32
 
-        m_sem.v.add_(delta.to(m_sem.v.dtype))
+        # Out-of-place add + reassignment (autograd-friendly path; see
+        # module docstring).  The previous in-place ``m_sem.v.add_`` would
+        # bump the version counter on a tensor that is later read by [C8],
+        # invalidating saved forward state for L_main / L_PRH backward.
+        m_sem.v = m_sem.v + delta.to(m_sem.v.dtype)
 
         # ---- Step 5: update slot_free + timestamp --------------------- #
         # γ_sem ≈ 0 ⇒ no meaningful write happened ⇒ skip metadata bumps.
         # We tolerate γ being exactly 0; the metadata update is gated by
         # both `gamma > 0` and `routing_prob > threshold`.
+        # M3 fix: use argmax (top-1) instead of threshold-based mask.
+        # With K_s=64 the softmax is too flat (~1/64=0.0156) for any slot
+        # to cross threshold 0.1, so slot_free never flipped → M_sem
+        # occupancy stayed 0% → C8 read found no occupied slots → C4
+        # received no gradient. Argmax guarantees the dominant slot per
+        # write is marked, breaking the deadlock without requiring sharp
+        # softmax tuning.
         with torch.no_grad():
-            occupied_mask = (
-                routing_probs > self.mark_occupied_threshold
-            ) & (gamma_f32.view(B, 1) > 0)  # (B, K_s) bool
-            if bool(occupied_mask.any()):
-                m_sem.slot_free[occupied_mask] = False
-                m_sem.timestamp[occupied_mask] = int(step)
+            gamma_active = gamma_f32 > 0  # (B,)
+            if bool(gamma_active.any()):
+                top_slot = routing_probs.argmax(dim=-1)  # (B,)
+                rows = torch.arange(B, device=top_slot.device)[gamma_active]
+                cols = top_slot[gamma_active]
+                m_sem.slot_free[rows, cols] = False
+                m_sem.timestamp[rows, cols] = int(step)

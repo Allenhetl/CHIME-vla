@@ -108,6 +108,12 @@ class ChimeVlaLightning(pl.LightningModule):
         self.log("train/L_main", out["L_main"], prog_bar=False, **log_kw)
         self.log("train/L_HCS", out["L_HCS"], prog_bar=False, **log_kw)
         self.log("train/L_PRH", out["L_PRH"], prog_bar=False, **log_kw)
+        # M3+ per-horizon L_PRH breakdown — lets us see whether each k
+        # learns independently (deliverable: per-k loss decreases).  Skipped
+        # silently when L_PRH is the zeroed short-circuit (λ_2==0 path).
+        per_k = out.get("L_PRH_per_k") or {}
+        for k, loss_k in per_k.items():
+            self.log(f"train/L_PRH_k{int(k)}", loss_k, prog_bar=False, **log_kw)
         self.log("train/L_CSM", out["L_CSM"], prog_bar=False, **log_kw)
         self.log("train/L_aux", out["L_aux"], prog_bar=False, **log_kw)
         if "L_predict" in out:

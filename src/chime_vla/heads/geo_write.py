@@ -10,7 +10,7 @@ SG-1 contract (CODE_STANDARDS §1.3, ``docs/grad_flow_contract.md``):
     L_HCS.  See ``tests/test_grad_flow.py::test_sg_1``.
 
 dtype path (CODE_STANDARDS §1.7):
-    h_t bf16 → projections in fp32 → in-place scatter into GeoGrid (fp32).
+    h_t bf16 → projections in fp32 → out-of-place scatter into GeoGrid (fp32).
 
 Pipeline (architecture v2.1 §B / §C, lines 477-538):
     1. token_to_voxel MLP: h_t → voxel_pos ∈ [0, 1]^3
@@ -18,6 +18,15 @@ Pipeline (architecture v2.1 §B / §C, lines 477-538):
     3. discretise voxel_pos to level-L coords, scatter-add the
        α_l · γ_geo · v_proj delta into m_geo.grids[L]
     4. stamp m_geo.timestamp[L] at every touched voxel with ``step``.
+
+Autograd-friendly write path (M3+):
+    The data-channel update uses ``torch.index_put`` (out-of-place) and
+    REASSIGNS ``m_geo.grids[L]``.  This avoids version-counter conflicts
+    when L_main / L_PRH drive the readout through the *same* tensor that
+    [C3] writes — in-place ``index_put_`` would invalidate the saved
+    forward state of any subgraph that read the pre-write tensor.  The
+    timestamp channel remains an in-place ``index_put_`` because it has
+    no autograd consumers (int64 LRU bookkeeping, never differentiated).
 
 Sparse-write invariants (architecture lines 511-538):
     * γ_geo = 0 ⇒ no write (algebraically exact, since the scatter value is 0).
@@ -147,15 +156,18 @@ class GeoWriteHead(nn.Module):
             cy = coord[..., 1].reshape(-1)
             cz = coord[..., 2].reshape(-1)
 
-            # scatter-add delta into m_geo.grids[L] using index_put_(accumulate=True).
+            # scatter-add delta into m_geo.grids[L] using OUT-OF-PLACE
+            # index_put + reassignment (autograd-friendly path).  See module
+            # docstring "Autograd-friendly write path" for rationale.
             # delta_flat: (B*N, d_g); m_geo.grids[L]: (B, L, L, L, d_g) fp32.
             delta_flat = delta.reshape(B * N, self.d_g)
             grid = m_geo.grids[L]
-            grid.index_put_(
+            new_grid = grid.index_put(
                 (batch_idx, cx, cy, cz),
                 delta_flat,
                 accumulate=True,
             )
+            m_geo.grids[L] = new_grid
 
             # Timestamp: stamp every touched (b, x, y, z) with step, but
             # only for batch lanes with γ > 0.  This preserves the invariant

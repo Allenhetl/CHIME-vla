@@ -142,16 +142,18 @@ def chime_train_step(
         m_work_post = shifted
 
         # 4) [C3]/[C4] writes (SG-1: detach γ before passing to write heads).
-        # NB: under torch.no_grad() so the in-place scatter does not enter
-        # the autograd graph.  In M1 the write-head gradients arrive only
-        # via L_HCS (which is 0 until E1 PASS); L_main ↔ write-head paths
-        # are M2+ once we bring in proper graph-friendly memory.
+        # M3+: the write paths use OUT-OF-PLACE scatter / add and reassign
+        # ``m_geo.grids[L]`` / ``m_sem.v``, so they participate in the
+        # autograd graph cleanly.  L_main now flows
+        #     L_main → [C9] → [C8] → m_geo.grids / m_sem.v → [C3]/[C4]
+        # which is the M3 deliverable (write-head grad-norm > 1e-5).
+        # SG-1 still applies to ``γ_geo / γ_sem`` (detached below); ``h_t``
+        # itself stays gradient-tracked so [C1] receives signal through the
+        # write heads' projections.
         gamma_geo_sg = gamma_geo.detach()
         gamma_sem_sg = gamma_sem.detach()
-        h_t_sg = h_t.detach()
-        with torch.no_grad():
-            model.c3(h_t_sg, gamma_geo_sg, m_geo, step=t)
-            model.c4(h_t_sg, gamma_sem_sg, m_sem, step=t)
+        model.c3(h_t, gamma_geo_sg, m_geo, step=t)
+        model.c4(h_t, gamma_sem_sg, m_sem, step=t)
 
         # 5) [C8] readout — c_t (B, N_q + K_w, d_h)
         c_t = model.c8(m_work_post, m_geo, m_sem, h_t)
@@ -208,10 +210,11 @@ def chime_train_step(
     # / autograd memory on a term that won't contribute.  M0/M1 smoke YAMLs
     # set lambda_2=0; M2 m2_prh_only.yaml flips it to 1.0.
     lam2 = float(cfg.loss.lambda_2)
+    L_PRH_per_k: dict[int, Tensor] = {}
     if lam2 != 0.0 and len(m_t_steps) > 0 and getattr(model, "c11", None) is not None:
         m_seq = torch.stack(m_t_steps, dim=1)        # (B, T, d_h)
         h_seq = torch.stack(h_pool_steps, dim=1)     # (B, T, d_h)
-        L_PRH = compute_prh_loss(
+        L_PRH, L_PRH_per_k = compute_prh_loss(
             model.c11,
             m_seq,
             h_seq,
@@ -219,6 +222,7 @@ def chime_train_step(
             valid_mask,
             cfg.c11.horizons,
             cfg.c11.alpha_a,
+            return_per_k=True,
         )
     else:
         L_PRH = a_pred.new_zeros(())
@@ -319,5 +323,9 @@ def chime_train_step(
         "M_geo_occupancy": torch.as_tensor(geo_occ, dtype=torch.float32),
         "M_sem_occupancy": torch.as_tensor(sem_occ, dtype=torch.float32),
         "attn_entropy_M_work": attn_entropy.mean().detach() if attn_entropy.numel() else torch.zeros(()),
+        # Per-horizon L_PRH breakdown (M3+ logging).  Only the scalar
+        # values are kept — backward graph for the loss term is owned by
+        # the summed ``L_PRH`` above.
+        "L_PRH_per_k": {int(k): v.detach() for k, v in L_PRH_per_k.items()},
     }
     return out
