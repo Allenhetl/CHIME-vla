@@ -1,0 +1,26 @@
+# @package _global_
+#
+# M4 — full 5-loss training: L_main + L_HCS + L_PRH + L_CSM + L_aux.
+# L_GC (lambda_4) stays off in MVP; flip on for full model only.
+
+milestone: M4
+experiment_name: m4_full_5loss
+
+train:
+  bs: 24
+  max_epochs: 8
+  bptt_truncate: 32
+
+hindsight:
+  enabled: true
+  strategy: per_task_q75
+
+loss:
+  lambda_1_target: 0.3
+  lambda_1_schedule: anneal_post_e1
+  step_e1_pass: 0
+  anneal_steps: 5000
+  lambda_2: 0.5
+  lambda_3: 0.1
+  lambda_4: 0.0
+  lambda_ent: 0.01

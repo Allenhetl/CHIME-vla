@@ -1,0 +1,58 @@
+# @package _global_
+#
+# CHIME full — architecture v2.1 §0.7.3.
+# All 13 components on, ViT-L backbone, 4-step ODE in [C9],
+# transformer psi in [C5], K_s=256 slots, multi-resolution voxel grid.
+#
+# Used in M3+ once MVP loop is closed.  Heavier compute; needs ≥40GB GPU.
+
+c1:
+  backbone: siglip_vit_l
+  lora_r: 32
+  freeze_backbone: false
+
+c2:
+  K_w: 8
+  d_h: 1152
+  N: 256
+
+c3:
+  write_levels: [8, 16, 32]
+
+c5:
+  psi_layers: 2
+  use_gru: false
+  d_proj: 64
+
+c6:
+  levels: [8, 16, 32]
+  d_g: 64
+  alpha_l: [0.5, 1.0, 0.5]
+
+c7:
+  K_s: 256
+  d_s: 256
+  evict_strategy: csm_lru
+
+c8:
+  N_q: 16
+  N_geo_q: 16
+  use_kv_cache: true
+
+c9:
+  head: flow_matching_pi0
+  lora_r: 32
+  one_step_distill: false
+  freeze_base: false
+
+c10:
+  enabled: true
+  deltas: [4, 16, 64]
+  saliency_method: EAGN
+
+c11:
+  horizons: [4, 16, 64]
+
+c12:
+  n_slots_per_step: 4
+  beta: 0.1

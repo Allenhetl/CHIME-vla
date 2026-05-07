@@ -1,0 +1,42 @@
+# @package _global_
+#
+# M2 — train only [C5] ψ + (geo_proj/sem_proj) under L_HCS, freeze everything
+# else.  Used to validate γ̂ → ψ supervision works in isolation before turning
+# on L_main.  See IMPLEMENTATION_PLAN.md M2 gate.
+
+milestone: M2
+experiment_name: m2_phi_only
+
+train:
+  bs: 16
+  max_epochs: 3
+  bptt_truncate: 32
+
+# Freeze all components except [C5].  Implementation: Lightning module reads
+# this list and applies `requires_grad_(False)` accordingly.
+freeze:
+  - c1
+  - c2
+  - c3
+  - c4
+  - c6
+  - c7
+  - c8
+  - c9
+  - c10
+  - c11
+  - c12
+
+hindsight:
+  enabled: true
+
+loss:
+  lambda_1_target: 0.3
+  lambda_1_schedule: anneal_post_e1
+  step_e1_pass: 0
+  anneal_steps: 1000
+  # Only L_HCS active; L_main / L_PRH / L_CSM disabled.
+  lambda_2: 0.0
+  lambda_3: 0.0
+  lambda_4: 0.0
+  lambda_ent: 0.01

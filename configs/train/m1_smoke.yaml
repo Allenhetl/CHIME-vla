@@ -1,0 +1,30 @@
+# @package _global_
+#
+# M1 smoke — adds [C10] HindsightConsumer wiring.
+# Goal: confirm Hindsight γ̂ files load + L_HCS path is exercised once.
+# λ_1 stays at 0 until E1 PASS (M1 gate).
+
+milestone: M1
+experiment_name: m1_smoke
+
+train:
+  bs: 4
+  max_epochs: 1
+  bptt_truncate: 32
+
+data:
+  T_max: 128
+
+hindsight:
+  enabled: true
+  strategy: per_task_q75
+  task: libero_long
+
+loss:
+  # λ_1 stays 0 until E1 PASS — schedule will ramp after step_e1_pass.
+  lambda_1_target: 0.0
+  lambda_1_schedule: "off"
+  lambda_2: 0.0
+  lambda_3: 0.0
+  lambda_4: 0.0
+  lambda_ent: 0.0

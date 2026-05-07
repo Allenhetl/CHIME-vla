@@ -1,0 +1,37 @@
+# @package _global_
+#
+# M2 — train only [C11] PRH (predictive read head) on L_PRH.  Validates the
+# auxiliary forecasting head can predict future obs/action embeddings before
+# we plug it into the joint loss.  Other components frozen.
+
+milestone: M2
+experiment_name: m2_prh_only
+
+train:
+  bs: 16
+  max_epochs: 3
+  bptt_truncate: 32
+
+freeze:
+  - c1
+  - c2
+  - c3
+  - c4
+  - c5
+  - c6
+  - c7
+  - c8
+  - c9
+  - c10
+  - c12
+
+hindsight:
+  enabled: false
+
+loss:
+  lambda_1_target: 0.0
+  lambda_1_schedule: "off"
+  lambda_2: 1.0     # only L_PRH active (relative weight 1.0 within this run)
+  lambda_3: 0.0
+  lambda_4: 0.0
+  lambda_ent: 0.0

@@ -1,0 +1,115 @@
+# Base ChimeConfig — mirrors the dataclass defaults in
+# `src/chime_vla/config.py` (ChimeConfig).  Concrete experiment YAMLs (model/,
+# train/, data/) layer overrides on top via Hydra defaults list.
+#
+# DO NOT add experiment-specific settings here.  Anything that varies per run
+# belongs under model/ or train/ or experiment/.  See CODE_STRUCTURE.md §2.
+
+# === Component configs (13 components, snake_case keys aligned with dataclasses) ===
+
+c1:
+  backbone: siglip_vit_b
+  lora_r: 16
+  freeze_backbone: true
+
+c2:
+  K_w: 8
+  d_h: 1152
+  N: 256
+
+c3:
+  voxel_proj_hidden: 256
+  write_levels: [16]
+
+c4:
+  qv_proj_hidden: 256
+  softmax_temp: 0.5
+
+c5:
+  psi_layers: 1
+  use_gru: true
+  d_proj: 64
+  ema_coeff: 0.99
+  ema_warmup_steps: 2000
+  sigmoid_temp: 1.0
+
+c6:
+  levels: [16]
+  d_g: 64
+  alpha_l: [1.0]
+  workspace_bounds: [-1.0, 1.0, -1.0, 1.0, 0.0, 1.0]
+
+c7:
+  K_s: 64
+  d_s: 256
+  evict_strategy: timestamp
+
+c8:
+  N_q: 16
+  N_geo_q: 16
+  use_kv_cache: true
+
+c9:
+  head: flow_matching_pi0
+  lora_r: 16
+  one_step_distill: true
+  freeze_base: true
+
+c10:
+  enabled: true
+  base_policy: pi05
+  deltas: [4, 16]
+  rudder_dim: 256
+  saliency_method: EAGN
+
+c11:
+  horizons: [4, 16, 64]
+  alpha_a: 1.0
+  pred_mlp_hidden: 512
+
+c12:
+  n_slots_per_step: 4
+  beta: 0.1
+
+# === Loss / training / data / hindsight ===
+
+loss:
+  lambda_1_target: 0.3
+  lambda_1_schedule: anneal_post_e1
+  step_e1_pass: 0
+  anneal_steps: 5000
+  lambda_2: 0.5
+  lambda_3: 0.1
+  lambda_4: 0.0
+  lambda_ent: 0.01
+  entropy_floor: 1.0
+
+train:
+  lr: 1.0e-4
+  bs: 24
+  precision: bf16-mixed
+  max_epochs: 5
+  grad_clip: 1.0
+  warmup_steps: 500
+  optimizer: adamw
+  betas: [0.9, 0.95]
+  wd: 0.01
+  bptt_truncate: 32
+  grad_ckpt: true
+  accumulate: 1
+
+data:
+  root: /home/sqmluser/data/memory_vla/libero_long/
+  cache_root: output/cache/libero_long
+  splits_path: output/splits/libero_long_8_1_1.json
+  T_max: 256
+  img_size: 224
+  proprio_dim: 8
+  action_dim: 8
+  normalize: true
+
+hindsight:
+  enabled: true
+  gamma_hat_root: /home/sqmluser/workspace/theaj/CHIME-VLA/Hindsight/output/saliency/gamma_hat
+  strategy: per_task_q75
+  task: libero_long

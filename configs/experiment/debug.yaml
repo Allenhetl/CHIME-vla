@@ -1,0 +1,32 @@
+# @package _global_
+#
+# Ad-hoc debug — minimum-viable shapes so you can drop a breakpoint and step
+# through `chime_train_step` without waiting on real data.  Not a milestone
+# config; do not commit results from this run as evaluation numbers.
+#
+# Invoke: `python scripts/10_train.py +experiment=debug`
+
+milestone: M0
+experiment_name: debug
+
+train:
+  bs: 1
+  max_epochs: 1
+  warmup_steps: 0
+  bptt_truncate: 16
+  grad_ckpt: false
+  accumulate: 1
+
+data:
+  T_max: 16
+
+hindsight:
+  enabled: false
+
+loss:
+  lambda_1_target: 0.0
+  lambda_1_schedule: "off"
+  lambda_2: 0.0
+  lambda_3: 0.0
+  lambda_4: 0.0
+  lambda_ent: 0.0

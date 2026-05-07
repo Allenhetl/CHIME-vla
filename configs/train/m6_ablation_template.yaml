@@ -1,0 +1,46 @@
+# @package _global_
+#
+# M6 ablation template — copy-and-edit base for the 6+ ablations in
+# IMPLEMENTATION_PLAN §M6.  Each run flips ONE knob (component / loss term /
+# memory size) so deltas are interpretable.
+#
+# Ablation knobs (uncomment + edit the one you're ablating):
+#
+#   # A1: kill L_HCS  (γ̂ → 0 weight)
+#   # loss.lambda_1_target: 0.0
+#
+#   # A2: kill L_PRH
+#   # loss.lambda_2: 0.0
+#
+#   # A3: kill L_CSM (and switch eviction back to timestamp)
+#   # loss.lambda_3: 0.0
+#   # c7.evict_strategy: timestamp
+#
+#   # A4: kill M_geo (set levels=[] is invalid; instead skip writes by
+#   #     freezing C3 and zeroing alpha_l).
+#   # c6.alpha_l: [0.0]
+#   # freeze: [c3]
+#
+#   # A5: kill M_sem (freeze [C4] write head; reads see only frozen-random k/v).
+#   # freeze: [c4]
+#
+#   # A6: shrink K_w (FIFO from 8 → 2 to test FIFO length sensitivity)
+#   # c2.K_w: 2
+
+milestone: M6
+experiment_name: m6_ablation_TODO_RENAME
+
+train:
+  bs: 24
+  max_epochs: 8
+  bptt_truncate: 32
+
+hindsight:
+  enabled: true
+
+loss:
+  lambda_1_target: 0.3
+  lambda_2: 0.5
+  lambda_3: 0.1
+  lambda_4: 0.0
+  lambda_ent: 0.01

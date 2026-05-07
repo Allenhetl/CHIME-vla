@@ -1,0 +1,24 @@
+# @package _global_
+#
+# M3 — joint training of L_main + L_PRH.  λ_1 still 0 (no L_HCS yet); CSM off.
+# This is the first config that runs the full action expert + read interface
+# end-to-end with a real policy gradient.
+
+milestone: M3
+experiment_name: m3_main_prh
+
+train:
+  bs: 24
+  max_epochs: 5
+  bptt_truncate: 32
+
+hindsight:
+  enabled: false
+
+loss:
+  lambda_1_target: 0.0
+  lambda_1_schedule: "off"
+  lambda_2: 0.5
+  lambda_3: 0.0
+  lambda_4: 0.0
+  lambda_ent: 0.01

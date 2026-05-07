@@ -1,0 +1,51 @@
+# @package _global_
+#
+# CHIME MVP — architecture v2.1 §0.7.4.
+#
+# Cuts from chime_full:
+#   - ViT-B (vs ViT-L) backbone
+#   - 1-step ODE distill in [C9] (vs 4-8 step)
+#   - GRU psi in [C5] (vs 1-layer transformer)
+#   - K_s = 64 slots (vs 256)
+#   - delta set {4, 16} (vs {4, 16, 64})
+#   - Single voxel level [16] (vs [8, 16, 32])
+#
+# Use this as the M0..M2 default.  Switch to chime_full for M3+.
+
+c1:
+  backbone: siglip_vit_b
+  lora_r: 16
+  freeze_backbone: true
+
+c2:
+  K_w: 8
+  d_h: 1152
+  N: 256
+
+c3:
+  write_levels: [16]
+
+c5:
+  psi_layers: 1
+  use_gru: true
+  d_proj: 64
+
+c6:
+  levels: [16]
+  alpha_l: [1.0]
+
+c7:
+  K_s: 64
+  d_s: 256
+  evict_strategy: timestamp
+
+c9:
+  head: flow_matching_pi0
+  one_step_distill: true
+  freeze_base: true
+
+c10:
+  deltas: [4, 16]
+
+c11:
+  horizons: [4, 16]

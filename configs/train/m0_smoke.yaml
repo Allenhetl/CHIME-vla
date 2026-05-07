@@ -1,0 +1,33 @@
+# @package _global_
+#
+# M0 smoke — forward-only smoke test, single epoch, tiny batch.
+# Goal: verify import + forward + Hydra wiring.  No real training.
+#
+# - hindsight disabled (γ̂ may not exist on disk yet)
+# - lambda_1_target = 0 forces L_HCS contribution to 0 even if accidentally on
+# - bs / T scaled down so a forward pass runs on a single GPU in seconds
+
+milestone: M0
+experiment_name: m0_smoke
+
+train:
+  bs: 2
+  max_epochs: 1
+  grad_clip: 1.0
+  warmup_steps: 0
+  lr: 1.0e-4
+  bptt_truncate: 32
+
+data:
+  T_max: 64
+
+hindsight:
+  enabled: false
+
+loss:
+  lambda_1_target: 0.0
+  lambda_1_schedule: "off"
+  lambda_2: 0.0
+  lambda_3: 0.0
+  lambda_4: 0.0
+  lambda_ent: 0.0

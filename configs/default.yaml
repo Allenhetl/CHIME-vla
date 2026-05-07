@@ -1,0 +1,28 @@
+# CHIME-VLA top-level Hydra config.
+# Layered on top of `chime_vla.config.ChimeConfig` via Hydra structured config.
+# See CODE_STRUCTURE.md §1 + §2 and CODE_STANDARDS.md §2.
+
+defaults:
+  - base/chime
+  - model: chime_mvp
+  - train: m0_smoke
+  - data: libero_long
+  - _self_
+
+# === Top-level run metadata ===
+seed: 42
+experiment_name: default
+milestone: M0
+output_root: output
+
+# === Hydra runtime ===
+# CODE_STANDARDS §2.2: keep hydra.job.chdir OFF so relative paths are anchored
+# to the repo root.  Hydra writes its own logs/config under output_root.
+hydra:
+  job:
+    chdir: false
+  run:
+    dir: ${output_root}/_hydra_runs/${experiment_name}/${now:%Y-%m-%d_%H-%M-%S}
+  sweep:
+    dir: ${output_root}/_hydra_sweeps/${experiment_name}
+    subdir: ${hydra.job.num}
