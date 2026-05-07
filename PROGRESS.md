@@ -1,97 +1,97 @@
 # CHIME-VLA Progress Log
 
 > 自动更新文件。最近 5 操作 + 当前 milestone + blockers + next action。
-> orchestrator agent 在每 /loop tick 末尾由 progress-reporter 子 agent 维护。
 
 ## Current state
 
-- **Milestone**: **M0 完成** → M1 待启动(E1 判决 + smoke)
-- **Active branch**: `main`(已含全部 stage1-4 + M0 实施;已推 GitHub https://github.com/Allenhetl/CHIME-vla.git)
-- **Updated**: 2026-05-07 22:48
-- **Owner**: orchestrator(待用户启动 /loop 进入 M1)
-- **Mode**: M0 done → M1 准备
+- **Milestone**: M1 — **E1 milestone gate 已命中,等待用户决策**
+- **Active branch**: `m1/forward-impl`(已推 GitHub)
+- **Updated**: 2026-05-08
+- **Owner**: 待用户决策(milestone gate)
+- **Mode**: M1 forward + smoke 完成 → E1 pipeline 完成 → baseline (untrained) 与 random 等同
 
-## Recent operations (last 5)
+## Recent operations (last 8)
 
 | ts | agent | action | result | commit |
 |---|---|---|---|---|
-| 2026-05-07 | main | git init + chat/ docs baseline | green | 8f5d08c |
-| 2026-05-07 | main | Stage 1 一致性补丁 (D1-D5 + §I.6 + grad_flow_contract) | green | 7793198 |
-| 2026-05-07 | main | Stage 2 IMPLEMENTATION_PLAN + PLAN + PROGRESS + CODE_STANDARDS + hindsight_contract | green | (stage2 branch) |
-| 2026-05-07 | implementer × 2 (parallel) | Stage 3 code skeleton (13 components + configs + tests) | green: pip install OK, 24 tests 12 pass + 10 xfail + 2 xpass | 06c054e |
-| 2026-05-07 | main | Stage 4 autonomous_execution.md + PROGRESS schema + restart protocol | green | d4a9a47 |
-| 2026-05-07 | main | git: ff-merge stage3 → main + push to https://github.com/Allenhetl/CHIME-vla.git | green: 4 branches pushed | (push) |
-| 2026-05-07 | main | M0: scripts/00_build_libero_cache.py 真实实现 + 5 ep dry-run + 5 ep 实写验证 schema | green: T 范围 214-345, sub_task_id 边界 = E1 ground truth | (pending) |
+| 2026-05-07 | implementer × 3 | M1 [C1][C2][C5] forward 实现 | green; full chain smoke OK | c983d78 |
+| 2026-05-07 | data-pipeline (bg) | LIBERO 全 379 ep cache build | green: 15.28 GB / 101k 帧 / 69s | (in main) |
+| 2026-05-07 | implementer × 2 | M1 [C3][C4] 写头 + [C6][C7] memory + lru | green; M_geo 稀疏 1.5%; M_sem.v 累加 | e1b6c62 |
+| 2026-05-07 | implementer × 2 | M1 [C8] read + [C9] action | green; full 9-comp chain ✓ | 07ccf14 |
+| 2026-05-08 | implementer | M1 train_step + losses + datamodule + lightning + smoke | green; 5 batch × 7s; train_loss=8744 finite | 5fdd3f4 |
+| 2026-05-08 | experiment-runner | E1 pipeline 实现 + 5 ep untrained baseline | **MILESTONE GATE**: IoU=0.173 ≈ random(0.169) | d27ad01 |
 
 ## Blockers
 
-- (none)
+- **🚨 M1 E1 milestone gate 命中**(architecture 存亡判决,自主停下)
+  - untrained CHIME 在 5 LIBERO ep 上 IoU @ 0.3 = 0.173,与 random baseline (0.169) 等同——expected behavior for untrained model
+  - 真 E1 判决需要先训 CHIME 至少 100-500 step (L_main only,λ_1=0)
+  - **不能自主推进**——这是架构最大赌注的判决点(架构 §C 第 2 件赌注,工程直觉成功率 30-50%)
 
 ## Next action
 
-- **agent**: orchestrator(由 user `/loop 30m` 启动)
-- **task**: M1 启动:
-  1. data-pipeline:scripts/00_build_libero_cache.py 跑全 379 ep(预计 ~15 GB,1-2 hr)
-  2. data-pipeline:在 `Hindsight/` 仓跑 [C10] 离线 saliency on 前 200 LIBERO ep(用 Hindsight scripts/05_compute_saliency.py + 06_compute_thresholds + 07_label_gamma_hat),产出 `Hindsight/output/saliency/gamma_hat/per_task_q75/libero_long/ep_*.pt`
-  3. implementer:实现 [C1][C2][C5] forward(stub → 真实),启用 test_forward_shapes 真跑 + grad-flow 占位转 strict
-  4. experiment-runner:smoke training (B=2, T=64, 1 epoch),验证 L_main + L_aux finite + 梯度通畅
-  5. experiment-runner:E1 判决 — 用 sub_task_id boundary 算 IoU(γ̂_geo top-25%, boundary ± 4)
-- **ETA**: M1 完工 ~3 周(per IMPLEMENTATION_PLAN §3),硬件 2×4090
-- **首个 milestone gate**: E1 IoU 报告产出(自动停下,user 决定 PASS/SOFT/FAIL)
+**等用户决策**——4 个选项:
+
+| 选项 | 描述 | 时间预算 | 风险 |
+|---|---|---|---|
+| **(A) 训 CHIME 100-500 step + rerun E1** | 用 m0_smoke / m1_smoke config,L_main only,~5-15 min on 2×4090 | 短 | 训不充分时 IoU 仍可能模糊 |
+| **(B) 适配 Hindsight 到 LIBERO + Phase B 训练** | 跑 Hindsight 的完整 RMBench-pipeline 在 LIBERO 上,Phase B = 训 6-layer proxy ~30M params | ~1-2 hr | 工作量大但有成熟代码 |
+| **(C) 走 §0.7.4 MVP fallback** | 接受 E1 baseline,永久锁 λ_1=0,砍 [C10][C12][C13] | 跳过 | publishable claim 退到 MVP 级别 |
+| **(D) 其他** | 用户自定义路径 | - | - |
+
+**推荐 (A)** —— 时间预算最低,且 baseline 几近 random 强烈暗示 E1 判决需要训练做对照;A 失败再考虑 B 或 C。
 
 ## Milestone gate status
 
 ### Setup 阶段
-- [x] Stage 0 — git init(commit 8f5d08c)
-- [x] Stage 1 — architecture v2.1 一致性补丁(commit 7793198)
-- [x] Stage 2 — IMPLEMENTATION_PLAN + PLAN + PROGRESS + CODE_STANDARDS + hindsight_contract
-- [x] Stage 3 — Code skeleton(13 组件 stub + configs + tests + 22 modules import OK)
-- [x] Stage 4 — Autonomous execution protocol(orchestrator + 5 子 agent 规约 + git/loop/restart)
+- [x] Stage 0/1/2/3/4 全部 done
 
 ### Implementation 阶段
-- [x] **M0** Repo skeleton + Hindsight 契约 — IMPLEMENTATION_PLAN §2
-  - [x] pyproject.toml + 13 组件 stub
-  - [x] Hydra config 树 + 测试占位
-  - [x] CODE_STANDARDS + CODE_STRUCTURE + grad_flow_contract + hindsight_contract
-  - [x] `scripts/00_build_libero_cache.py` 真实实现 + 5 ep dry-run/实写验证(schema 对齐 sub_task_id 边界 = E1 ground truth)
-  - [x] git push to https://github.com/Allenhetl/CHIME-vla.git (main + 3 stage branches)
-- [ ] M1 — E1 判决 + smoke(IMPLEMENTATION_PLAN §3)
+- [x] **M0** — Repo skeleton + Hindsight 契约
+  - [x] cache 全 379 ep / 15.28 GB
+  - [x] 9 个 forward 组件全 import OK + smoke OK
+- [x] **M1 forward implementation**
+  - [x] [C1] VLMBackbone (SigLIP2 + LoRA, 2.4M trainable)
+  - [x] [C2] WorkBuffer (ring, 0 params)
+  - [x] [C5] ESPC (GRU + EMA + dual proj, 8.1M trainable)
+  - [x] [C3] GeoWriteHead (token_to_voxel + delta-rule scatter)
+  - [x] [C4] SemWriteHead (slot_free + softmax penalty + delta-rule)
+  - [x] [C6] GeoGrid (multi-res voxel + occupancy_pct + reset)
+  - [x] [C7] SemBank (frozen keys + slot_free + LRU)
+  - [x] [C8] ReadInterface (cross-attn + 三线性 + slot_free mask + entropy)
+  - [x] [C9] ActionExpert (1-step distill + LoRA, 49K trainable)
+  - [x] train_step + losses (L_main + L_aux + L_HCS sentinel)
+  - [x] datamodule + LightningModule + scripts/10_train.py
+  - [x] smoke training: 5 batch × 7s × 22 GB GPU OK
+- [x] **M1 E1 pipeline**
+  - [x] compute_jacobian_saliency + compute_iou_vs_boundaries
+  - [x] random baseline 控制对照
+  - [x] scripts/40_run_e1_judgment.py CLI
+  - [x] 5 ep untrained baseline run: IoU=0.173 ≈ random
+- [ ] **M1 E1 真判决**(等用户决策选项 A/B/C/D)
 - [ ] M2 — [C5] + [C11] 独立收敛
 - [ ] M3 — 联立 [C3][C6]+[C4][C7](硬件切换 6×A800)
 - [ ] M4 — 5-loss + LIBERO SR baseline
-- [ ] M6 — Ablation 套件(M5 已砍)
+- [ ] M6 — Ablation 套件
 
-## How to start /loop (用户操作)
+## Restart protocol
 
-```
-# 当前所有 stage 已经在 stage3/code-skeleton 分支(含 stage1+2+3+4 改动)
-# 1. 看 git log 确认改动
-git log --oneline -10
-
-# 2. (可选) merge 到 main
-git checkout main
-git merge stage3/code-skeleton
-
-# 3. 启动 /loop
-/loop 30m
-```
-
-## Restart protocol(中途停止后接续)
-
-新会话第一条指令(详见 `docs/autonomous_execution.md` §8):
+新会话第一条指令:
 
 ```
 读以下文件接续 CHIME-VLA 项目:
-1. /home/sqmluser/workspace/theaj/CHIME-VLA/PROGRESS.md      (本文件,state)
-2. /home/sqmluser/workspace/theaj/CHIME-VLA/PLAN.md          (scope 仪表盘)
-3. /home/sqmluser/workspace/theaj/CHIME-VLA/IMPLEMENTATION_PLAN.md  (按需)
-4. /home/sqmluser/workspace/theaj/CHIME-VLA/chat/architecture_v2.1.md  (按需)
+1. /home/sqmluser/workspace/theaj/CHIME-VLA/PROGRESS.md
+2. /home/sqmluser/workspace/theaj/CHIME-VLA/PLAN.md
+3. /home/sqmluser/workspace/theaj/CHIME-VLA/IMPLEMENTATION_PLAN.md
+4. /home/sqmluser/workspace/theaj/CHIME-VLA/output/reports/e1_baseline_untrained.json
 5. git log --oneline -20
 6. cd /home/sqmluser/workspace/theaj/CHIME-VLA && pytest -x --tb=line 2>&1 | tail -3
 
-然后:
-- "Next action" 单一明确 → dispatch 子 agent 执行
-- "Blockers" 非空 → 先解 blocker
-- milestone gate 命中且未 ack → 询问 user
-- 否则 → /loop 30m 回到自主模式
+milestone gate 状态:M1 E1 pipeline 已建,等用户决策 (A/B/C/D)。
 ```
+
+## GitHub
+
+- 仓库: https://github.com/Allenhetl/CHIME-vla.git
+- 已推分支: main, stage1/consistency-patches, stage2/implementation-plan, stage3/code-skeleton, m1/forward-impl
+- 最新 commit: `d27ad01` (m1/forward-impl) — E1 pipeline + baseline
