@@ -154,55 +154,159 @@ def hcs_bce_loss(
 
 
 def loss_prh(
-    prh_out: list | None,
+    prh_out: dict[int, dict[str, Tensor]] | None,
     future_obs: Tensor | None,
     future_actions: Tensor | None,
     valid_mask: Tensor,
     alpha_a: float,
     horizons: list[int],
 ) -> Tensor:
-    """L_PRH — sum_k MSE(o_hat[k] - o[t+k]) + α_a · MSE(a_hat[k] - a*[t+k]).
+    """L_PRH — Σ_k mean_{B, valid t∈[0,T-k)} ‖ô_{t+k} - o_{t+k}‖² + α_a·‖â_{t+k} - a*_{t+k}‖².
 
-    M1: PRH not yet wired into train_step; returns 0.  Future M2+ work
-    will populate ``prh_out`` and the future tensors.
+    Each horizon k is averaged over (B × valid-(T-k) × feature_dim) and
+    the per-horizon scalars are summed (no further averaging across
+    horizons — matches §3.8 spec / CODE_STANDARDS §1.4 reduction rule).
+
+    Horizons k ≥ T are silently skipped (no valid prediction window).
 
     Args:
-        prh_out:        list-of-T per-step PRH outputs, or None.
-        future_obs:     ``(B, T, K, d_h)`` fp32 future observations, or None.
-        future_actions: ``(B, T, K, action_dim)`` fp32, or None.
+        prh_out: ``{k: {'o_hat_seq': (B, T-k, d_h), 'a_hat_seq': (B, T-k,
+            action_dim)}}`` produced upstream.  ``None`` short-circuits to 0.
+        future_obs:     ``(B, T, d_h)`` fp32 — full per-frame ``h_t`` pool.
+            ``loss_prh`` slices ``[:, k:T]`` for each horizon.
+        future_actions: ``(B, T, action_dim)`` fp32 — ``a*_t`` (typically
+            ``batch['action']``).  Sliced ``[:, k:T]`` per horizon.
         valid_mask:     ``(B, T)`` bool.
         alpha_a:        weight on the action-loss term within L_PRH.
         horizons:       list of k offsets.
 
     Returns:
-        scalar fp32 — 0 in M1.
+        scalar fp32 — 0 if ``prh_out`` is ``None`` / no horizon contributes.
     """
-    return valid_mask.new_zeros((), dtype=torch.float32)
+    zero = valid_mask.new_zeros((), dtype=torch.float32)
+    if prh_out is None or future_obs is None or future_actions is None:
+        return zero
+
+    B, T = valid_mask.shape
+    total = zero
+    any_term = False
+
+    for k in horizons:
+        k = int(k)
+        if k <= 0 or T - k <= 0:
+            continue
+        per_k = prh_out.get(k)
+        if per_k is None:
+            continue
+        o_hat = per_k.get("o_hat_seq")
+        a_hat = per_k.get("a_hat_seq")
+        if o_hat is None or a_hat is None:
+            continue
+
+        # Targets: shift forward by k.
+        o_target = future_obs[:, k:T].to(torch.float32)        # (B, T-k, d_h)
+        a_target = future_actions[:, k:T].to(torch.float32)    # (B, T-k, action_dim)
+        sub_mask = valid_mask[:, k:T]                          # (B, T-k)
+
+        if o_hat.shape != o_target.shape or a_hat.shape != a_target.shape:
+            raise ValueError(
+                f"loss_prh shape mismatch at k={k}: "
+                f"o_hat={tuple(o_hat.shape)} vs target={tuple(o_target.shape)}, "
+                f"a_hat={tuple(a_hat.shape)} vs target={tuple(a_target.shape)}"
+            )
+
+        l_obs = masked_mse(o_hat.to(torch.float32), o_target, sub_mask)
+        l_act = masked_mse(a_hat.to(torch.float32), a_target, sub_mask)
+        total = total + l_obs + float(alpha_a) * l_act
+        any_term = True
+
+    if not any_term:
+        return zero
+    return total
 
 
-def compute_prh_loss(*args, **kwargs) -> Tensor:
-    """Backwards-compatible name.  Returns 0 in M1."""
-    return torch.zeros((), dtype=torch.float32)
+def compute_prh_loss(
+    prh_module,
+    m_seq: Tensor,
+    h_seq: Tensor,
+    a_seq: Tensor,
+    valid_mask: Tensor,
+    horizons: list[int],
+    alpha_a: float,
+) -> Tensor:
+    """End-to-end PRH loss helper used by :func:`chime_train_step`.
+
+    Forwards ``sg(m_seq[:, :T-k])`` through the PRH module per horizon and
+    feeds the result into :func:`loss_prh`.  Skips horizons where
+    ``T - k <= 0``.
+
+    Args:
+        prh_module: instance of :class:`chime_vla.heads.prh.PRH`.
+        m_seq:      ``(B, T, d_h)`` readout vectors (gradient-tracked
+            upstream — this helper applies ``.detach()`` per SG-2).
+        h_seq:      ``(B, T, d_h)`` per-frame patch-token mean (target).
+        a_seq:      ``(B, T, action_dim)`` ground-truth actions.
+        valid_mask: ``(B, T)`` bool.
+        horizons:   list of k offsets.
+        alpha_a:    weight on the action-loss term within L_PRH.
+
+    Returns:
+        scalar fp32 loss; 0 if no horizon yields a valid prediction window.
+    """
+    B, T, d_h = m_seq.shape
+
+    # Single forward over all T frames (SG-2: detach m before PRH).
+    # PRH returns predictions for every horizon k; per-horizon valid
+    # window [0, T-k) is sliced afterwards.
+    m_flat = m_seq.detach().reshape(B * T, d_h)
+    out = prh_module(m_flat)                          # {k: (o_hat, a_hat)} flat
+
+    prh_out: dict[int, dict[str, Tensor]] = {}
+    for k in horizons:
+        k = int(k)
+        if k <= 0 or T - k <= 0:
+            continue
+        o_hat_flat, a_hat_flat = out[k]
+        # (B*T, d_h) → (B, T, d_h); use only the first T-k frames.
+        o_hat = o_hat_flat.reshape(B, T, -1)[:, : T - k]
+        a_hat = a_hat_flat.reshape(B, T, -1)[:, : T - k]
+        prh_out[k] = {"o_hat_seq": o_hat, "a_hat_seq": a_hat}
+
+    return loss_prh(
+        prh_out=prh_out,
+        future_obs=h_seq,
+        future_actions=a_seq,
+        valid_mask=valid_mask,
+        alpha_a=alpha_a,
+        horizons=horizons,
+    )
 
 
 def loss_csm(csm_w: Tensor | None, beta: float) -> Tensor:
-    """L_CSM — -Var(w_i) - β · log(mean(w_i)).
+    """L_CSM — -Var_i(w_i) - β · log(Mean_i(w_i) + ε).
 
-    M1: CSM not yet implemented; returns 0.
+    Two terms:
+        * ``-Var_i(w_i)`` — maximises slot-importance heterogeneity (we
+          *want* CSM to discriminate between slots).
+        * ``-β · log Mean_i(w_i)`` — maximises overall slot utilisation
+          (prevents the degenerate solution where all slots look
+          unimportant).
 
     Args:
-        csm_w: ``(B, n_slots_per_step)`` fp32 importance weights, or None.
+        csm_w: ``(B, n_slots_per_step)`` fp32 importance weights, or None
+               (caller passes None when λ_3 == 0 / CSM disabled).
         beta:  log-mean weight from :class:`C12Config`.
 
     Returns:
-        scalar fp32 — 0 in M1.
+        scalar fp32.  Returns 0 when ``csm_w`` is None or empty.
     """
-    if csm_w is None:
+    if csm_w is None or csm_w.numel() == 0:
         return torch.zeros((), dtype=torch.float32)
     eps = 1e-6
-    w = csm_w.float().clamp(min=eps)
+    w = csm_w.float().clamp(min=0.0)
+    # -Var per row, mean over batch.  unbiased=False so n=1 row is finite.
     var_term = -w.var(dim=-1, unbiased=False).mean()
-    log_mean_term = -float(beta) * w.mean(dim=-1).clamp(min=eps).log().mean()
+    log_mean_term = -float(beta) * (w.mean(dim=-1) + eps).log().mean()
     return var_term + log_mean_term
 
 

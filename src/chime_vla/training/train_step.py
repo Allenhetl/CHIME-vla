@@ -24,11 +24,11 @@ from chime_vla.memory.geo_grid import GeoGrid
 from chime_vla.memory.sem_bank import SemBank
 from chime_vla.perception.fifo_buffer import WorkBuffer
 from chime_vla.training.losses import (
+    compute_prh_loss,
     loss_aux,
     loss_csm,
     loss_hcs,
     loss_main,
-    loss_prh,
 )
 from chime_vla.training.schedules import lambda_1_schedule
 
@@ -106,6 +106,8 @@ def chime_train_step(
     gamma_geo_steps: list[Tensor] = []
     gamma_sem_steps: list[Tensor] = []
     attn_entropy_steps: list[Tensor] = []
+    m_t_steps: list[Tensor] = []      # (B, d_h) per t — for PRH input
+    h_pool_steps: list[Tensor] = []   # (B, d_h) per t — for PRH obs target
 
     bptt_n = max(1, int(cfg.train.bptt_truncate))
 
@@ -155,6 +157,12 @@ def chime_train_step(
         gamma_geo_steps.append(gamma_geo)
         gamma_sem_steps.append(gamma_sem)
 
+        # PRH bookkeeping (M2+).  m_t = mean over readout tokens (post-C8);
+        # detached/sg applied later inside compute_prh_loss per SG-2.
+        # h_pool = mean over patch tokens (the predicted future obs target).
+        m_t_steps.append(c_t.mean(dim=1))
+        h_pool_steps.append(h_t.mean(dim=1))
+
         # entropy diagnostic / L_aux signal
         try:
             ent_t = model.c8.attn_entropy_to_M_work
@@ -188,8 +196,65 @@ def chime_train_step(
         gamma_hat_sem,
         valid_mask,
     )
-    L_PRH = loss_prh(None, None, None, valid_mask, cfg.c11.alpha_a, cfg.c11.horizons)
-    L_CSM = loss_csm(None, cfg.c12.beta)
+    # ---- L_PRH (M2+) ----
+    # Skip the C11 forward entirely when λ_2 == 0 to avoid spending FLOPs
+    # / autograd memory on a term that won't contribute.  M0/M1 smoke YAMLs
+    # set lambda_2=0; M2 m2_prh_only.yaml flips it to 1.0.
+    lam2 = float(cfg.loss.lambda_2)
+    if lam2 != 0.0 and len(m_t_steps) > 0 and getattr(model, "c11", None) is not None:
+        m_seq = torch.stack(m_t_steps, dim=1)        # (B, T, d_h)
+        h_seq = torch.stack(h_pool_steps, dim=1)     # (B, T, d_h)
+        L_PRH = compute_prh_loss(
+            model.c11,
+            m_seq,
+            h_seq,
+            action_gt,
+            valid_mask,
+            cfg.c11.horizons,
+            cfg.c11.alpha_a,
+        )
+    else:
+        L_PRH = a_pred.new_zeros(())
+
+    # ---- L_CSM (M3+) ----
+    # Skip the C12 leave-one-out probe when λ_3 == 0 (M1 default) — the
+    # probe is expensive (n_slots_per_step extra read+action forwards
+    # per step) and contributes nothing to the gradient when its weight
+    # is zero.  When λ_3 != 0 we run it on the *last* timestep only
+    # (per architecture v2.1: "每 mini-batch 抽 4 slot") against the
+    # frozen [C9] snapshot if available, else against the live [C9]
+    # (which carries its own freeze_base contract).
+    lam3 = float(cfg.loss.lambda_3)
+    csm_w: Tensor | None = None
+    if (
+        lam3 != 0.0
+        and getattr(model, "c12", None) is not None
+        and getattr(model, "c8", None) is not None
+        and getattr(model, "c9", None) is not None
+        and len(a_pred_steps) > 0
+    ):
+        last_t = T - 1
+        # Re-derive the last timestep's c_t / h_pool from the cached
+        # readout state.  m_t_steps holds c_t.mean(dim=1) which lost the
+        # token axis; we instead recompute c_t at the end-of-loop state
+        # of memory containers (m_work_post / m_geo / m_sem are already
+        # at their final values after the for-loop terminated).
+        h_t_last = model.c1(rgb[:, last_t], proprio[:, last_t])
+        h_t_cls_last = h_t_last.mean(dim=1)
+        c_t_last = model.c8(c2.buffer, m_geo, m_sem, h_t_last)
+        frozen_c9 = getattr(model, "c9_frozen", None) or model.c9
+        csm_w = model.c12(
+            c_t_last,
+            h_t_cls_last,
+            c2.buffer,
+            m_geo,
+            m_sem,
+            model.c8,
+            frozen_c9,
+            h_t_last,
+        )
+
+    L_CSM = loss_csm(csm_w, cfg.c12.beta)
     L_aux = loss_aux(attn_entropy, cfg.loss.lambda_ent)
 
     lam1 = lambda_1_schedule(step, cfg.loss)
@@ -197,7 +262,7 @@ def chime_train_step(
     total = (
         L_main
         + lam1 * L_HCS
-        + float(cfg.loss.lambda_2) * L_PRH
+        + lam2 * L_PRH
         + float(cfg.loss.lambda_3) * L_CSM
         + L_aux
     )
