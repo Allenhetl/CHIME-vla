@@ -2,60 +2,62 @@
 
 ## Current state
 
-- **Milestone**: M1 完成 → **MVP fallback applied** → 进入 M2 (reduced loss set)
-- **Active branch**: `m1/forward-impl` (推 GitHub)
+- **Milestone**: M0/M1/M2/M3 ALL PASS (MVP fallback path) → ready for M4
+- **Active branch**: `m1/forward-impl` (推 GitHub, 18+ commits)
 - **Updated**: 2026-05-08
 - **Mode**: Autonomous orchestrator
-- **Critical decision**: M1 E1 cascade HARD-FAIL → architecture §0.7.4 + §I.4 #1 fallback applied
 
-## Recent operations (last 8)
+## Progress arc (autonomous from milestone gate to M3 PASS)
+
+| Step | Result |
+|---|---|
+| Setup Stage 0-4 | Repo + arch v2.1 + IMPLEMENTATION_PLAN + 13 component skeleton + orchestrator |
+| M0 cache build | 379 LIBERO ep, 15.28 GB, 101k frames |
+| M1 forward (9 comp) | 17.6M trainable params, full smoke train OK |
+| M1 E1 cascade | untrained 0.173 → 200step 0.202 → norm 0.227 → 800step 0.177 (overfit) |
+| M1 E1 verdict | HARD-FAIL → §0.7.4 MVP fallback applied (λ_1=0 永久, drop [C10][C12][C13]) |
+| C11 PRH + C12 CSM | M2/M3 prep, 5.3M+ params, sem write head with slot_free |
+| xfail cleanup | tests 12+10xpass+2xfail → **22 passed + 2 xfailed** strict |
+| C5 self-supervised | L_predict — ψ trains via prediction error (not L_HCS) |
+| **M2 PASS** | L_PRH 214× ↓, L_predict 8× ↓ |
+| M3 grad flow fix | C3/C4 out-of-place memory updates, C3/C4 grad alive |
+| M3 slot_free fix | argmax replaces threshold (was deadlocked at K_s=64) |
+| **M3 PASS** | L_PRH per-k each 200×+ ↓, M_geo 2.6%, write head grad live |
+
+## Most recent operations (last 8)
 
 | ts | agent | action | result | commit |
 |---|---|---|---|---|
-| 2026-05-07 | implementer × 9 | M1 forward 9 components (C1-C9) | green; full chain ✓ | 5fdd3f4 |
-| 2026-05-08 | experiment-runner | E1 untrained baseline (5 ep) | IoU @ 0.3 = 0.173 ≈ random | d27ad01 |
-| 2026-05-08 | experiment-runner | E1 200 step trained (no norm) | IoU @ 0.3 = 0.202 (+0.029) | cdcbeb8 |
-| 2026-05-08 | implementer | A2 action normalization | datamodule + stats.json | 19d0175 |
-| 2026-05-08 | experiment-runner | E1 200 step + norm (A2) | IoU @ 0.3 = 0.227 (peak) | (output/reports) |
-| 2026-05-08 | experiment-runner | E1 800 step + norm (A1+) | IoU @ 0.3 = **0.177** REGRESSED (overfit) | (output/reports) |
-| 2026-05-08 | implementer × 2 | C11 PRH + C12 CSM + L_PRH/L_CSM wiring | M2 prep ready, 22 passed + 2 xfail | 817c014 |
-| 2026-05-08 | main | xfail cleanup (10 XPASS → strict pass) | tests 22+2 cleanly | e833be9 |
-
-## E1 Cascade — Final Decision
-
-**Architecture §I.4 #1 (30-50% probability) fallback path activated:**
-
-| Run | IoU(main) | IoU @0.3 | IoU @0.5 | IoU @0.7 | random |
-|---|---|---|---|---|---|
-| untrained | 0.146 | 0.173 | 0.258 | 0.307 | 0.169 |
-| 200 step | 0.188 | 0.202 | 0.273 | 0.312 | 0.169 |
-| 200 step + norm | **0.197** | **0.227** | 0.280 | 0.317 | 0.169 |
-| 800 step + norm | 0.149 | 0.177 | 0.241 | 0.309 | 0.169 |
-
-**Verdict**: Cascade peak IoU @ 0.3 = 0.227 < 0.3 SOFT-PASS bar < 0.4 PASS bar = **HARD-FAIL**.
-
-**Root cause**: Simple Jacobian saliency `∂a_{t+Δ}/∂o_t` magnitude does NOT align with sub_task_id boundaries on LIBERO. Architecture's full [C10] HCS-H needs RUDDER + grad-cam decomposition to recover task structure. Empirically: 800 step training **regressed** IoU below 200 step (overfit).
-
-**Architecture-prescribed fallback (§0.7.4 + §I.4 #1)**:
-- λ_1 = 0 permanently → drop L_HCS
-- drop [C10] HCS-H, [C12] CSM, [C13] reverse Jacobian
-- keep: L_main + L_PRH + L_aux (3-loss MVP)
-- Publishable claim retreats to "Event-segmentation prediction error 双通道 delta-rule + MERLIN-style predictive read" (architecture line 1979)
+| 2026-05-08 | impl × 9 | 9 forward components | green | 5fdd3f4 |
+| 2026-05-08 | exp-runner | E1 cascade (4 runs) | HARD-FAIL → §0.7.4 fallback | 7be0f24 |
+| 2026-05-08 | impl | C11 PRH + C12 CSM + L_PRH/L_CSM | green | 817c014 |
+| 2026-05-08 | main | xfail cleanup | 22 passed + 2 xfail | e833be9 |
+| 2026-05-08 | impl | C5 L_predict + analysis script | M2 PASS | 4aba7bc |
+| 2026-05-08 | impl | C3/C4 grad flow + per-k L_PRH + slot_free argmax | **M3 PASS** | fbf019a |
 
 ## Blockers
 
-- (none) — autonomous progression resumed under MVP fallback
+- (none) — autonomous progression continues through M3
 
-## Next action
+## Next action (M4)
 
-**M2 stage** with reduced loss set:
-1. Implement C5 self-supervised prediction loss (ψ predicts h_t from M_work, MSE)
-2. Train M2 with `+train=m2_mvp_fallback`
-3. Verify L_PRH @ k=4,16 monotonic decrease
-4. Verify [C11] PRH gradient signal alive
-5. Skip M2 [C5] IoU > 0.5 verification (since L_HCS off, γ_sem self-supervised only)
+**M4 deliverable per IMPLEMENTATION_PLAN §6** (LIBERO-only, MVP fallback adapted):
+1. Full multi-loss training on LIBERO-Long (extend from 200 → 2000+ steps)
+2. Held-out validation loss curves
+3. SR evaluation on LIBERO held-out tasks
+4. (Optional) OpenVLA + history baseline for delta comparison
 
-**ETA**: 1-2 sessions of dispatched agent work + ~30 min training
+**M4 challenges**:
+- Long training run (~40-80 min for 1000-2000 steps on 2×4090)
+- LIBERO simulator integration for true SR evaluation (not yet wired)
+- Baseline runner (OpenVLA fine-tune or pulled checkpoint)
+
+**Pragmatic M4 path** (autonomous):
+- Phase 4a: longer training + val loss tracking (training is straightforward)
+- Phase 4b: implement offline SR proxy (held-out action MSE as SR proxy until simulator wired)
+- Phase 4c: defer full SR evaluation + OpenVLA baseline to "production stage" (when 6×A800 available)
+
+**ETA**: 30-60 min for Phase 4a + 4b autonomous work
 
 ## Milestone gate status
 
@@ -63,34 +65,48 @@
 - [x] All complete
 
 ### M0 — Repo skeleton + Hindsight 契约
-- [x] Complete (cache 379 ep + 9 component imports + skeleton tests)
+- [x] cache 379 ep / 15.28 GB
+- [x] 9 component imports OK + skeleton tests
+- [x] git push to GitHub
 
 ### M1 — Forward implementation + smoke + E1
-- [x] [C1-C9] forward all implemented (17.6M trainable params)
-- [x] [C11] PRH + [C12] CSM implemented (M2 prep)
-- [x] train_step + 5 losses (L_HCS sentinel, L_PRH/L_CSM real, L_main + L_aux real)
-- [x] datamodule + LightningModule + scripts/10_train.py
-- [x] smoke training: 800 step on LIBERO + checkpoint OK
-- [x] **E1 cascade — HARD-FAIL → MVP fallback applied**
-- [x] action normalization (datamodule loads stats.json)
+- [x] [C1-C9] forward implemented (17.6M trainable)
+- [x] [C11] PRH + [C12] CSM (M2 prep)
+- [x] train_step + 5-loss assembly
+- [x] datamodule (with action normalization) + LightningModule
+- [x] smoke training: 800 step OK
+- [x] **E1 cascade — HARD-FAIL → MVP fallback applied** (architectural existential decision concluded)
 
-### M2 — [C5] + [C11] independent (REDUCED per MVP fallback)
-- [ ] C5 self-supervised prediction loss (no L_HCS, ψ trains on prediction error only)
-- [ ] C11 L_PRH @ k=4,16 monotonic decrease verification
-- [ ] config: `m2_mvp_fallback.yaml` already created
+### M2 — [C5] + [C11] independent (REDUCED per MVP fallback) ✓ PASS
+- [x] [C5] L_predict self-supervised (ψ trains via h_t prediction MSE)
+- [x] [C11] L_PRH 214× monotonic decrease verified
+- [x] grad-flow CI strict pass
 
-### M3 — joint training (REDUCED)
-- [ ] L_main + L_PRH joint, no L_HCS / L_CSM
-- [ ] write head gradient flow verification
+### M3 — joint training (REDUCED) ✓ PASS
+- [x] L_main + L_PRH + L_predict joint training
+- [x] C3/C4 write head grad flow alive (out-of-place memory updates)
+- [x] M_geo occupancy 2.6% (target 1-10% ✓)
+- [x] L_PRH per-k log (k=4 / k=16) — each 200×+ ↓
+- [x] slot_free argmax fix (M_sem from 0% → 1.56%)
 
-### M4 — full reduced 3-loss training + LIBERO SR baseline
-- [ ] L_main + L_PRH + L_aux on LIBERO-Long
-- [ ] vs OpenVLA + 8-frame history baseline, SR Δ ≥ 10%
+### M4 — full training + LIBERO SR baseline (NEXT)
+- [ ] Phase 4a: longer training + val curves
+- [ ] Phase 4b: offline SR proxy
+- [ ] Phase 4c: defer to production stage (LIBERO sim + OpenVLA baseline)
 
-### M6 — Ablation (reduced set)
-- [ ] subset of 10 ablations applicable to 3-loss config
+### M6 — Ablation (3-loss subset, post-M4)
 
 ## GitHub
 - 仓库: https://github.com/Allenhetl/CHIME-vla.git
-- 分支: main + 4 stage + m1/forward-impl (12+ commits, all pushed)
-- 最新: m1/forward-impl with E1 cascade conclusion + xfail cleanup
+- Branches: main + 4 stage + m1/forward-impl
+- m1/forward-impl: 18 commits; latest: `fbf019a` M3 PASS
+
+## Key empirical learnings (for paper writing later)
+
+1. **Simple Jacobian saliency proxy doesn't recover sub_task boundaries** on LIBERO (peak IoU 0.227 at quantile 0.3 vs target 0.4) — confirms architecture's §I.4 #1 risk; full HCS-H with RUDDER + grad-cam likely required for hindsight signal
+2. **Action normalization helps slightly** (+0.025 IoU) but doesn't fix fundamental signal weakness
+3. **800-step over-training regresses IoU** — confirms our saliency proxy isn't the right one for E1
+4. **C5 self-supervised L_predict works alone** — 8× MSE drop in 200 steps; ψ can train without L_HCS
+5. **slot_free + threshold > 0.1 was deadlocked** at K_s=64 (softmax too flat); argmax breaks the deadlock
+6. **GeoGrid sparse-write invariant holds** — 2.6% voxel occupancy across 200 steps (architecture target 1-10%)
+7. **L_PRH 200×+ reduction in 151 steps** — predictive read learning works fast
