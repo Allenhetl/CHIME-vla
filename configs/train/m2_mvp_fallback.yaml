@@ -1,0 +1,46 @@
+# M2 MVP fallback — applied per architecture v2.1 §0.7.4 + §I.4 #1 after
+# E1 HARD-FAIL on 2026-05-08 (cascade max IoU @ 0.3 = 0.227 < 0.3 SOFT-PASS bar).
+#
+# Cascade evidence (5 LIBERO ep):
+#   untrained               IoU @ 0.3 = 0.173  (~ random 0.169)
+#   200 step (no norm)      IoU @ 0.3 = 0.202  (+0.029)
+#   200 step + norm         IoU @ 0.3 = 0.227  (+0.054, peak)
+#   800 step + norm         IoU @ 0.3 = 0.177  (REGRESSED — overfit)
+#
+# Conclusion: simple Jacobian saliency proxy + BC training does NOT produce
+# sub-task-aligned hindsight signal. Architecture-prescribed §I.4 #1 fallback:
+#   - λ_1 = 0 永久 (no L_HCS)
+#   - drop [C10] HCS-H (saliency labeler)
+#   - drop [C12] CSM (slot importance)
+#   - drop [C13] reverse Jacobian
+#   - keep: L_main + L_PRH + L_aux (publishable claim per architecture line 1979)
+
+# Loss config: zero out HCS / CSM / GC permanently
+loss:
+  lambda_1_target: 0.0      # was 0.3 — drop L_HCS
+  lambda_1_schedule: off    # was anneal_post_e1
+  lambda_2: 0.5             # keep L_PRH (M2 main signal)
+  lambda_3: 0.0             # was 0.1 — drop L_CSM
+  lambda_4: 0.0             # L_GC stays off
+  lambda_ent: 0.01          # keep L_aux entropy
+
+# Disable training-only modules
+c10:
+  enabled: false            # [C10] HCS-H disabled
+
+# Hindsight pipeline disabled (no γ̂ load)
+hindsight:
+  enabled: false
+
+# M2 trains in two stages (per IMPLEMENTATION_PLAN §4):
+#   stage 1: [C5] self-supervised prediction error only (no L_HCS)
+#   stage 2: [C11] independent on L_PRH
+# Both can run with L_main also active to avoid catastrophic forgetting of [C9].
+train:
+  max_epochs: 5             # M2 budget; can extend if metrics flat
+  lr: 1.0e-4
+  bs: 2                     # 2×4090 limit
+  warmup_steps: 100         # shorter for M2 since no big λ schedule
+
+milestone: M2_mvp_fallback
+experiment_name: m2_mvp_fallback
