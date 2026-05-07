@@ -82,6 +82,10 @@ class LiberoLongDataset(Dataset):
         proprio_dim: int = 8,
         action_dim: int = 8,
         consumer: Optional[HindsightConsumer] = None,
+        action_mean: Optional[torch.Tensor] = None,
+        action_std: Optional[torch.Tensor] = None,
+        proprio_mean: Optional[torch.Tensor] = None,
+        proprio_std: Optional[torch.Tensor] = None,
     ):
         self.cache_dir = Path(cache_dir)
         self.episodes = list(episode_ids)
@@ -89,6 +93,12 @@ class LiberoLongDataset(Dataset):
         self.proprio_dim = int(proprio_dim)
         self.action_dim = int(action_dim)
         self.consumer = consumer
+        # Normalization stats (None = no normalization).
+        # Shape: (action_dim,) and (proprio_dim,).
+        self.action_mean = action_mean
+        self.action_std = action_std
+        self.proprio_mean = proprio_mean
+        self.proprio_std = proprio_std
 
     def __len__(self) -> int:
         return len(self.episodes)
@@ -108,6 +118,13 @@ class LiberoLongDataset(Dataset):
         proprio = blob["proprio"][:T].to(torch.float32)
         action = blob["action"][:T].to(torch.float32)
         sub_task_id = blob["sub_task_id"][:T].to(torch.int32)
+
+        # z-score normalization (CODE_STANDARDS §1 — applied at data layer
+        # so loss reduction is balanced across action dims).
+        if self.action_mean is not None and self.action_std is not None:
+            action = (action - self.action_mean) / (self.action_std + 1e-6)
+        if self.proprio_mean is not None and self.proprio_std is not None:
+            proprio = (proprio - self.proprio_mean) / (self.proprio_std + 1e-6)
 
         # Pad to T_max if needed.
         valid_mask = torch.zeros(self.T_max, dtype=torch.bool)
@@ -262,12 +279,46 @@ class LiberoLongDataModule(pl.LightningDataModule):
 
         consumer = self._build_consumer()
 
+        # Load normalization stats from /data/.../meta/stats.json if available.
+        action_mean = action_std = proprio_mean = proprio_std = None
+        if bool(getattr(self.cfg.data, "normalize", True)):
+            stats_path = Path(self.cfg.data.root) / "meta" / "stats.json"
+            if stats_path.exists():
+                with stats_path.open() as f:
+                    stats = json.load(f)
+                a = stats.get("action", {})
+                p = stats.get("observation.state", {})
+                action_dim_target = int(self.cfg.data.action_dim)
+                proprio_dim_target = int(self.cfg.data.proprio_dim)
+                # action: meta has 7 dims; pad to action_dim with mean=0, std=1
+                a_mean = list(a.get("mean", []))
+                a_std = list(a.get("std", []))
+                while len(a_mean) < action_dim_target:
+                    a_mean.append(0.0)
+                while len(a_std) < action_dim_target:
+                    a_std.append(1.0)
+                action_mean = torch.tensor(a_mean[:action_dim_target], dtype=torch.float32)
+                action_std = torch.tensor(a_std[:action_dim_target], dtype=torch.float32)
+                # proprio similarly (meta has 8 dims = full)
+                p_mean = list(p.get("mean", []))
+                p_std = list(p.get("std", []))
+                while len(p_mean) < proprio_dim_target:
+                    p_mean.append(0.0)
+                while len(p_std) < proprio_dim_target:
+                    p_std.append(1.0)
+                proprio_mean = torch.tensor(p_mean[:proprio_dim_target], dtype=torch.float32)
+                proprio_std = torch.tensor(p_std[:proprio_dim_target], dtype=torch.float32)
+
         kw = dict(
             cache_dir=cache_dir,
             T_max=self.cfg.data.T_max,
             proprio_dim=self.cfg.data.proprio_dim,
             action_dim=self.cfg.data.action_dim,
             consumer=consumer,
+            action_mean=action_mean,
+            action_std=action_std,
+            proprio_mean=proprio_mean,
+            proprio_std=proprio_std,
         )
         self.train_ds = LiberoLongDataset(episode_ids=train_ids, **kw)
         self.val_ds = LiberoLongDataset(episode_ids=val_ids, **kw)
