@@ -607,7 +607,9 @@ A800-80GB ≈ A100-80GB BF16 算力（~280-310 TFLOPS），NVLink 带宽限制 4
 
 **砍掉**：[C10][C12][C13]、L_HCS、L_CSM、L_GC；[C6] 单分辨率 16³；benchmark 收敛到 LIBERO-Long + CALVIN ABCD→D。
 
-**保留**：[C1 ViT-B][C2][C3 简化][C4][C5 仅 prediction-error self-supervised, GRU 实现][C6 16³][C7 简单 timestamp LRU][C8 + KV cache][C9 1-step] + L_main + L_PRH + L_aux。
+**保留**：[C1 ViT-B][C2][C3 简化][C4][C5 仅 prediction-error self-supervised, GRU 实现][C6 16³][C7 简单 timestamp LRU][C8 + KV cache][C9 1-step][**C11 PRH（training-only）**] + L_main + L_PRH + L_aux。
+
+> **D3 修订（2026-05-07）**：原版漏列 [C11]——L_PRH 是 MVP 仅有的两条 aux loss 之一（与 L_aux 并列），无 [C11] head 则 L_PRH 无法计算。架构 v2.1 §I.6 已锁定。
 
 **预期**：推理 80-130 ms（7.7-12.5 Hz）✅；训练 10M frames、batch 24、6×A800、5 epoch ≈ 4-5 天。
 
