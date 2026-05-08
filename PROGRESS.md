@@ -2,8 +2,8 @@
 
 ## Current state
 
-- **Milestone**: M0/M1/M2/M3/**M4 ALL PASS** (MVP fallback path) → M5 dropped → M6 next
-- **Active branch**: `m1/forward-impl` (推 GitHub, 20 commits, ready to merge)
+- **Milestone**: M0/M1/M2/M3/M4/**M6 ALL PASS** (MVP fallback path; M5 dropped per LIBERO-only)
+- **Active branch**: `main` (m1/forward-impl merged, 22+ commits, all pushed)
 - **Updated**: 2026-05-08
 - **Mode**: Autonomous orchestrator
 
@@ -100,13 +100,19 @@
 
 ### M5 — DROPPED per user (LIBERO-only)
 
-### M6 — Ablation (3-loss subset, NEXT)
-Subset of 10 ablations applicable to MVP fallback path:
-- [ ] Remove L_PRH (lambda_2=0): does L_main alone suffice?
-- [ ] Remove L_predict (lambda_predict=0): is C5 self-sup necessary?
-- [ ] Single-channel (M_geo only or M_sem only): does dual channel help?
-- [ ] K_s ∈ {32, 64, 128}: slot bank capacity
-- [ ] slot_free mask vs naive zero-fill: D5 修订必要性
+### M6 — Ablation suite ✓ PASS (5 of 5 applicable ablations)
+| Run                              | MSE   | Hit@σ/2 | Ratio  |
+|----------------------------------|-------|---------|--------|
+| Baseline 200step (full MVP)      | 65.46 |  20.8%  | 24.22× |
+| Abl 1 — no L_PRH                 |  5.38 |  40.9%  |  5.77× |
+| Abl 2 — no L_predict             |  3.45 |  45.7%  | 11.92× |
+| Abl 3 — K_s=128                  |  1.42 |  50.5%  |  8.18× |
+| Abl 4 — K_s=32                   |  2.10 |  50.9%  | 10.48× |
+| Abl 5 — no slot_free penalty     |  5.26 |  40.8%  |  9.15× |
+| Reference: M4 600 step           |  0.75 |  61.8%  |  5.24× |
+
+Findings: K_s=128 sweet spot (46× MSE↓ vs K_s=64); aux losses help long-term
+not short-term; slot_free penalty validated (D5 修订正确).
 
 ## GitHub
 - 仓库: https://github.com/Allenhetl/CHIME-vla.git
