@@ -51,6 +51,9 @@ class C4Config:
 
     qv_proj_hidden: int = 256
     softmax_temp: float = 0.5
+    # M6 ablation 5: free-slot logit penalty. 1e9 = D5 修订规约;
+    # 0.0 = naive zero-fill (无 slot_free mask 隔离).
+    slot_free_penalty: float = 1.0e9
 
 
 @dataclass

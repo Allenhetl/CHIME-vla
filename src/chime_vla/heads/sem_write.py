@@ -45,6 +45,10 @@ from chime_vla.memory.sem_bank import SemBank
 # doesn't expose it; safe default per architecture v2.1 [C4] §D.5.
 _MARK_OCCUPIED_THRESHOLD: float = 0.1
 
+# M6 ablation 5: 通过 cfg.c4.slot_free_penalty 控制 free-slot logit penalty.
+# 默认 1e9 (D5 修订规约); 设为 0 即禁用 mask, 退化为 naive zero-fill.
+_DEFAULT_SLOT_FREE_PENALTY: float = 1e9
+
 
 def _make_mlp(d_in: int, d_hidden: int, d_out: int) -> nn.Module:
     """Two-layer MLP with GELU non-linearity (matches [C3] convention)."""
@@ -76,6 +80,10 @@ class SemWriteHead(nn.Module):
         self.K_s: int = K_s
         self.qv_proj_hidden: int = cfg.qv_proj_hidden
         self.softmax_temp: float = cfg.softmax_temp
+        # M6 ablation 5 hook: read penalty value from cfg if provided
+        self.slot_free_penalty: float = float(
+            getattr(cfg, "slot_free_penalty", _DEFAULT_SLOT_FREE_PENALTY)
+        )
 
         # Routing query + value projections.  pool(h_t) ∈ R^{d_h} → R^{d_s}.
         self.mlp_q = _make_mlp(d_h, self.qv_proj_hidden, d_s)
@@ -142,10 +150,11 @@ class SemWriteHead(nn.Module):
         # First-write fallback: if every slot in a row is free, do not
         # subtract the penalty — otherwise softmax over all -1e9 ⇒ NaN.
         all_free_per_row = slot_free.all(dim=-1, keepdim=True)  # (B, 1)
+        slot_free_penalty = float(getattr(self, "slot_free_penalty", _DEFAULT_SLOT_FREE_PENALTY))
         penalty = torch.where(
             all_free_per_row,
             torch.zeros_like(slot_free, dtype=torch.float32),
-            slot_free.to(torch.float32) * 1e9,
+            slot_free.to(torch.float32) * slot_free_penalty,
         )  # (B, K_s)
         logits = logits - penalty
         routing_probs = F.softmax(logits, dim=-1)  # (B, K_s)
